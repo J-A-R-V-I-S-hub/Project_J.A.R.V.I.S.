@@ -17,6 +17,8 @@ from agno.tools.websearch import WebSearchTools
 
 from .attachments import prepare_agent_input
 from .config import Settings
+from .integrations.weather import get_weather
+from .reminders import ReminderStore
 from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
 from .schemas import ChartSeries, ChartSpec, IncomingMessage, PendingArtifact
 
@@ -164,8 +166,48 @@ class JarvisAgentRunner:
                 "Non salvare segreti, token, chiavi o dettagli temporanei."
             ),
         )
+        self.reminders = ReminderStore(settings.app_db_path_obj, settings.timezone)
 
-    def _build_tools(self, csv_paths: list[Path], runtime_tools: list[object]) -> list[object]:
+    def _reminder_tools(self, chat_id: int) -> list[object]:
+        def create_reminder(text: str, due_at: str, recurrence: str = "none") -> str:
+            """Crea un promemoria e lo invia su Telegram alla data indicata.
+
+            `due_at` accetta ISO ('2026-10-22 09:00') oppure forme come
+            'domani alle 8', 'tra 2 ore', '+30m', '18:30'.
+            `recurrence` può essere 'none', 'daily' o 'weekly'.
+            """
+            try:
+                reminder = self.reminders.add(chat_id, text, due_at, recurrence)
+            except ValueError as exc:
+                return f"Impossibile creare il promemoria: {exc}"
+            when = reminder.due_local(self.reminders.tz).strftime("%d/%m/%Y %H:%M")
+            return f"Promemoria #{reminder.id} creato per {when}: {reminder.text}"
+
+        def list_reminders() -> str:
+            """Elenca i promemoria attivi di questa chat."""
+            return self.reminders.format_list(self.reminders.list(chat_id))
+
+        def cancel_reminder(reminder_id: int) -> str:
+            """Annulla un promemoria attivo dato il suo id."""
+            if self.reminders.cancel(chat_id, reminder_id):
+                return f"Promemoria #{reminder_id} annullato."
+            return f"Nessun promemoria attivo con id {reminder_id}."
+
+        return [create_reminder, list_reminders, cancel_reminder]
+
+    def _weather_tool(self) -> object:
+        def current_weather(location: str = "") -> str:
+            """Meteo attuale e previsione di oggi per una località."""
+            return get_weather(
+                location or self.settings.location_name,
+                latitude=self.settings.latitude,
+                longitude=self.settings.longitude,
+                timezone=self.settings.timezone,
+            )
+
+        return current_weather
+
+    def _build_tools(self, chat_id: int, csv_paths: list[Path], runtime_tools: list[object]) -> list[object]:
         tools: list[object] = [
             FileTools(base_dir=self.settings.workspace_path, enable_delete_file=False),
             LocalFileSystemTools(target_directory=str(self.settings.output_path)),
@@ -173,6 +215,8 @@ class JarvisAgentRunner:
             ShellTools(base_dir=self.settings.shell_sandbox_path),
             WebSearchTools(fixed_max_results=5),
             HackerNewsTools(),
+            self._weather_tool(),
+            *self._reminder_tools(chat_id),
             *runtime_tools,
         ]
         if csv_paths:
@@ -222,7 +266,7 @@ class JarvisAgentRunner:
             tool_call_limit=self.settings.agent_tool_call_limit,
             retries=self.settings.agent_retries,
             markdown=True,
-            tools=self._build_tools(csv_paths, runtime_tools),
+            tools=self._build_tools(chat_id, csv_paths, runtime_tools),
             instructions=[
                 "Sei Jarvis, un assistente personale privato, proattivo e preciso.",
                 "Quando l'utente invia un audio usa la trascrizione come fonte primaria e cita eventuali incertezze.",

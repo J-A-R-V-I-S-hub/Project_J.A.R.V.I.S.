@@ -43,9 +43,23 @@ class Settings(BaseSettings):
     agent_retries: int = Field(default=1, alias="JARVIS_AGENT_RETRIES")
     max_concurrent_runs: int = Field(default=1, alias="JARVIS_MAX_CONCURRENT_RUNS")
 
+    # App state (reminders, artifacts, quality history)
+    app_db_path: str = Field(default="data/jarvis_app.db", alias="JARVIS_APP_DB_PATH")
+    reminder_poll_seconds: int = Field(default=15, alias="JARVIS_REMINDER_POLL_SECONDS")
+    daily_brief_enabled: bool = Field(default=True, alias="JARVIS_DAILY_BRIEF_ENABLED")
+    daily_brief_time: str = Field(default="08:00", alias="JARVIS_DAILY_BRIEF_TIME")
+    location_name: str = Field(default="Casteggio", alias="JARVIS_LOCATION")
+    latitude: float | None = Field(default=None, alias="JARVIS_LATITUDE")
+    longitude: float | None = Field(default=None, alias="JARVIS_LONGITUDE")
+    file_retention_days: int = Field(default=30, alias="JARVIS_FILE_RETENTION_DAYS")
+
     @property
     def db_path(self) -> Path:
         return Path(self.agno_db_path)
+
+    @property
+    def app_db_path_obj(self) -> Path:
+        return Path(self.app_db_path)
 
     @property
     def workspace_path(self) -> Path:
@@ -73,6 +87,7 @@ class Settings(BaseSettings):
 
     def ensure_directories(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.app_db_path_obj.parent.mkdir(parents=True, exist_ok=True)
         for path in (
             self.workspace_path,
             self.incoming_path,

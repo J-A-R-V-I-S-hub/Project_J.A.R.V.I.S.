@@ -4,8 +4,10 @@ import asyncio
 import logging
 import mimetypes
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime, time as dt_time
 from pathlib import Path
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -13,10 +15,22 @@ from aiogram.types import FSInputFile, Message
 
 from .agent import ArtifactQueue, JarvisAgentRunner
 from .config import Settings
+from .integrations.weather import get_weather
 from .schemas import Attachment, AttachmentType, IncomingMessage, PendingArtifact
+from .stats import collect_stats, format_stats
 
 LOGGER = logging.getLogger(__name__)
 TELEGRAM_MESSAGE_LIMIT = 4096
+
+ITALIAN_DAYS = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+ITALIAN_MONTHS = [
+    "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
+    "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre",
+]
+
+
+def italian_date(moment: datetime) -> str:
+    return f"{ITALIAN_DAYS[moment.weekday()]} {moment.day} {ITALIAN_MONTHS[moment.month - 1]} {moment.year}"
 
 HELP_TEXT = (
     "🤖 **J.A.R.V.I.S.**\n\n"
@@ -24,11 +38,14 @@ HELP_TEXT = (
     "**Comandi**\n"
     "/start — presentazione\n"
     "/help — questo messaggio\n"
-    "/reset — dimentica la conversazione corrente\n\n"
+    "/reset — dimentica la conversazione corrente\n"
+    "/stats — statistiche d'uso\n"
+    "/files — ultimi file generati\n\n"
     "**Cosa so fare**\n"
     "• rispondere e ricordare il contesto della chat\n"
     "• trascrivere audio e descrivere immagini\n"
     "• analizzare PDF e CSV, creare grafici e report PDF\n"
+    "• creare promemoria e inviarti il brief del mattino\n"
     "• usare il web, i file e una sandbox Python/shell\n"
 )
 
@@ -48,6 +65,8 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_start, Command("start"))
         self.dispatcher.message.register(self.handle_help, Command("help"))
         self.dispatcher.message.register(self.handle_reset, Command("reset"))
+        self.dispatcher.message.register(self.handle_stats, Command("stats"))
+        self.dispatcher.message.register(self.handle_files, Command("files"))
         self.dispatcher.message.register(self.handle_voice, F.voice)
         self.dispatcher.message.register(self.handle_audio, F.audio)
         self.dispatcher.message.register(self.handle_photo, F.photo)
@@ -66,7 +85,14 @@ class JarvisTelegramService:
 
     async def run_polling(self) -> None:
         self.settings.ensure_directories()
-        await self.dispatcher.start_polling(self.bot, allowed_updates=["message"])
+        scheduler = asyncio.create_task(self._scheduler_loop())
+        try:
+            await self.dispatcher.start_polling(self.bot, allowed_updates=["message"])
+        finally:
+            scheduler.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduler
+            await self.bot.session.close()
 
     async def handle_start(self, message: Message) -> None:
         if not self._guard(message):
@@ -87,6 +113,123 @@ class JarvisTelegramService:
             return
         await asyncio.to_thread(reset, message.chat.id)
         await message.answer("Sessione azzerata. Ripartiamo da zero. 🧠")
+
+    async def handle_stats(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        stats = await asyncio.to_thread(collect_stats, self.settings.db_path)
+        await message.answer(format_stats(stats))
+
+    async def handle_files(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        files = self._recent_files()
+        if not files:
+            await message.answer("Nessun file generato finora.")
+            return
+        lines = ["🗂️ **Ultimi file generati**"]
+        for path in files:
+            size_kb = max(1, path.stat().st_size // 1024)
+            moment = datetime.fromtimestamp(path.stat().st_mtime).strftime("%d/%m %H:%M")
+            lines.append(f"• `{path.name}` — {size_kb} KB — {moment}")
+        await message.answer("\n".join(lines))
+
+    def _recent_files(self, limit: int = 10) -> list[Path]:
+        candidates: list[Path] = []
+        for directory in (self.settings.output_path, self.settings.reports_path):
+            if not directory.exists():
+                continue
+            candidates.extend(
+                path for path in directory.iterdir() if path.is_file() and not path.name.startswith(".")
+            )
+        candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        return candidates[:limit]
+
+    async def _scheduler_loop(self) -> None:
+        """Deliver due reminders and the optional morning brief."""
+        last_brief_date = None
+        await asyncio.sleep(2)
+        while True:
+            try:
+                await self._dispatch_due_reminders()
+                last_brief_date = await self._maybe_send_daily_brief(last_brief_date)
+                await asyncio.to_thread(self._cleanup_incoming)
+            except Exception:
+                LOGGER.exception("Scheduler iteration failed")
+            await asyncio.sleep(max(5, self.settings.reminder_poll_seconds))
+
+    @property
+    def _reminder_store(self):
+        return getattr(self.agent_runner, "reminders", None)
+
+    async def _dispatch_due_reminders(self) -> None:
+        store = self._reminder_store
+        if store is None:
+            return
+        for reminder in await asyncio.to_thread(store.due):
+            try:
+                await self.bot.send_message(
+                    reminder.chat_id,
+                    f"⏰ Promemoria\n\n{reminder.text}",
+                    disable_notification=False,
+                )
+            except Exception:
+                LOGGER.exception("Failed to deliver reminder %s", reminder.id)
+                continue
+            await asyncio.to_thread(store.mark_sent, reminder)
+
+    async def _maybe_send_daily_brief(self, last_brief_date):
+        if not self.settings.daily_brief_enabled:
+            return last_brief_date
+        timezone_info = ZoneInfo(self.settings.timezone)
+        now = datetime.now(timezone_info)
+        hour, minute = (int(part) for part in self.settings.daily_brief_time.split(":", 1))
+        if now.time() < dt_time(hour, minute) or last_brief_date == now.date():
+            return last_brief_date
+
+        text = await asyncio.to_thread(self._build_daily_brief, now)
+        try:
+            await self.bot.send_message(self.settings.telegram_allowed_user_id, text)
+        except Exception:
+            LOGGER.exception("Failed to deliver the daily brief")
+            return last_brief_date
+        return now.date()
+
+    def _build_daily_brief(self, now: datetime) -> str:
+        timezone_info = ZoneInfo(self.settings.timezone)
+        sections = [f"☀️ **Buongiorno, signore.**\n{italian_date(now)}"]
+        sections.append(
+            get_weather(
+                self.settings.location_name,
+                latitude=self.settings.latitude,
+                longitude=self.settings.longitude,
+                timezone=self.settings.timezone,
+            )
+        )
+
+        store = self._reminder_store
+        if store is not None:
+            today = [
+                reminder
+                for reminder in store.list(self.settings.telegram_allowed_user_id)
+                if reminder.due_local(timezone_info).date() == now.date()
+            ]
+            if today:
+                lines = ["⏰ **Oggi**"]
+                for reminder in today:
+                    lines.append(f"• {reminder.due_local(timezone_info).strftime('%H:%M')} — {reminder.text}")
+                sections.append("\n".join(lines))
+
+        return "\n\n".join(sections)
+
+    def _cleanup_incoming(self) -> None:
+        cutoff = datetime.now().timestamp() - self.settings.file_retention_days * 86400
+        if not self.settings.incoming_path.exists():
+            return
+        for path in self.settings.incoming_path.iterdir():
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                with suppress(OSError):
+                    path.unlink()
 
     async def handle_text(self, message: Message) -> None:
         await self._process_message(message)
