@@ -16,6 +16,14 @@ from aiogram.types import FSInputFile, Message
 from .agent import ArtifactQueue, JarvisAgentRunner
 from .config import Settings
 from .integrations.weather import get_weather
+from .quality import (
+    build_quality_artifacts,
+    mark_quality_file,
+    pending_quality_files,
+    record_snapshot,
+    trend_spec,
+)
+from .reporting import render_chart
 from .schemas import Attachment, AttachmentType, IncomingMessage, PendingArtifact
 from .stats import collect_stats, format_stats
 
@@ -153,6 +161,7 @@ class JarvisTelegramService:
             try:
                 await self._dispatch_due_reminders()
                 last_brief_date = await self._maybe_send_daily_brief(last_brief_date)
+                await self._process_quality_inbox()
                 await asyncio.to_thread(self._cleanup_incoming)
             except Exception:
                 LOGGER.exception("Scheduler iteration failed")
@@ -221,6 +230,44 @@ class JarvisTelegramService:
                 sections.append("\n".join(lines))
 
         return "\n\n".join(sections)
+
+    async def _process_quality_inbox(self) -> None:
+        if not self.settings.quality_watch_enabled:
+            return
+        pending = await asyncio.to_thread(
+            pending_quality_files,
+            self.settings.quality_watch_path,
+            self.settings.app_db_path_obj,
+        )
+        for path in pending:
+            try:
+                report, artifacts = await asyncio.to_thread(
+                    build_quality_artifacts,
+                    path,
+                    self.settings.output_path,
+                    self.settings.reports_path,
+                )
+                await asyncio.to_thread(record_snapshot, self.settings.app_db_path_obj, report)
+                spec = await asyncio.to_thread(trend_spec, self.settings.app_db_path_obj)
+                if spec is not None:
+                    trend_path = await asyncio.to_thread(
+                        render_chart,
+                        self.settings.output_path / f"{path.stem}-trend.png",
+                        spec,
+                    )
+                    artifacts.append(trend_path)
+                await self._deliver_artifacts(
+                    self.settings.telegram_allowed_user_id,
+                    [
+                        PendingArtifact(local_path=artifact, caption=f"Analisi qualità — {path.name}")
+                        for artifact in artifacts
+                    ],
+                )
+            except Exception:
+                LOGGER.exception("Quality watcher failed for %s", path)
+            finally:
+                with suppress(Exception):
+                    await asyncio.to_thread(mark_quality_file, self.settings.app_db_path_obj, path)
 
     def _cleanup_incoming(self) -> None:
         cutoff = datetime.now().timestamp() - self.settings.file_retention_days * 86400
@@ -323,6 +370,7 @@ class JarvisTelegramService:
                         self.settings.output_path,
                         self.settings.reports_path,
                         self.settings.workspace_path,
+                        self.settings.app_db_path_obj,
                     )
                     async with self._run_semaphore:
                         reply_text = await asyncio.to_thread(self.agent_runner.run, incoming, artifact_queue)
@@ -361,6 +409,11 @@ class JarvisTelegramService:
             return AttachmentType.PDF
         if lowered.endswith(".csv") or mime == "text/csv":
             return AttachmentType.CSV
+        if lowered.endswith((".xlsx", ".xls")) or mime in {
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+        }:
+            return AttachmentType.XLSX
         guessed_mime, _ = mimetypes.guess_type(file_name)
         if (guessed_mime or mime).startswith("image/"):
             return AttachmentType.IMAGE

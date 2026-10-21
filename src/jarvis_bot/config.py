@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     latitude: float | None = Field(default=None, alias="JARVIS_LATITUDE")
     longitude: float | None = Field(default=None, alias="JARVIS_LONGITUDE")
     file_retention_days: int = Field(default=30, alias="JARVIS_FILE_RETENTION_DAYS")
+    quality_watch_dir: str = Field(default="data/weldtrace", alias="JARVIS_QUALITY_WATCH_DIR")
+    quality_watch_enabled: bool = Field(default=True, alias="JARVIS_QUALITY_WATCH_ENABLED")
 
     @property
     def db_path(self) -> Path:
@@ -85,6 +87,10 @@ class Settings(BaseSettings):
     def shell_sandbox_path(self) -> Path:
         return Path(self.shell_sandbox_dir)
 
+    @property
+    def quality_watch_path(self) -> Path:
+        return Path(self.quality_watch_dir)
+
     def ensure_directories(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.app_db_path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -95,6 +101,7 @@ class Settings(BaseSettings):
             self.reports_path,
             self.python_sandbox_path,
             self.shell_sandbox_path,
+            self.quality_watch_path,
         ):
             path.mkdir(parents=True, exist_ok=True)
 

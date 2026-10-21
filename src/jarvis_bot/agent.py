@@ -18,6 +18,7 @@ from agno.tools.websearch import WebSearchTools
 from .attachments import prepare_agent_input
 from .config import Settings
 from .integrations.weather import get_weather
+from .quality import build_quality_artifacts, record_snapshot, trend_spec
 from .reminders import ReminderStore
 from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
 from .schemas import ChartSeries, ChartSpec, IncomingMessage, PendingArtifact
@@ -32,10 +33,17 @@ def _coerce_chart_spec(spec: ChartSpec | dict | None) -> ChartSpec | None:
 class ArtifactQueue:
     """Collect files the agent wants to send back to Telegram."""
 
-    def __init__(self, output_dir: Path, reports_dir: Path, workspace_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        output_dir: Path,
+        reports_dir: Path,
+        workspace_dir: Path | None = None,
+        app_db_path: Path | None = None,
+    ) -> None:
         self.output_dir = output_dir
         self.reports_dir = reports_dir
         self.workspace_dir = workspace_dir
+        self.app_db_path = app_db_path
         self.items: list[PendingArtifact] = []
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
@@ -152,6 +160,62 @@ class ArtifactQueue:
         write_csv_file(csv_path, rows_json)
         self._queue_if_requested(csv_path, caption or safe_name, queue_for_delivery)
         return str(csv_path)
+
+    def create_quality_report(
+        self,
+        file_path: str,
+        title: str = "",
+        product_column: str = "",
+        category_columns: str = "",
+        caption: str = "",
+        queue_for_delivery: bool = True,
+    ) -> str:
+        """Analizza una tabella di difetti (CSV/Excel) e crea grafici + report PDF.
+
+        `file_path` è il percorso locale della tabella. `product_column` e
+        `category_columns` sono opzionali: se vuoti vengono rilevati in automatico
+        (la prima colonna testuale è il prodotto, le colonne numeriche sono le categorie).
+        `category_columns` può essere una lista separata da virgole.
+        """
+        path = Path(file_path).expanduser().resolve()
+        if not path.exists():
+            return f"File non trovato: {path}"
+        try:
+            report, artifacts = build_quality_artifacts(
+                path,
+                output_dir=self.output_dir,
+                reports_dir=self.reports_dir,
+                title=title or None,
+                product_column=product_column or None,
+                category_columns=category_columns or None,
+            )
+        except Exception as exc:
+            return f"Analisi qualità non riuscita: {exc}"
+
+        if self.app_db_path is not None:
+            try:
+                record_snapshot(self.app_db_path, report)
+            except Exception:
+                pass
+
+        for artifact in artifacts:
+            self._queue_if_requested(artifact, caption or report.source, queue_for_delivery)
+        names = ", ".join(artifact.name for artifact in artifacts)
+        return f"{report.summary}\n\nFile creati: {names}"
+
+    def create_quality_trend(
+        self,
+        file_name: str = "quality-trend.png",
+        caption: str = "",
+        queue_for_delivery: bool = True,
+    ) -> str:
+        """Crea un grafico del trend dei difetti totali tra le analisi salvate."""
+        if self.app_db_path is None:
+            return "Trend non disponibile: database applicativo non configurato."
+        spec = trend_spec(self.app_db_path)
+        if spec is None:
+            return "Servono almeno due analisi qualità salvate per disegnare il trend."
+        return self.create_chart(spec, file_name=file_name, caption=caption, queue_for_delivery=queue_for_delivery)
 
 
 class JarvisAgentRunner:
@@ -302,6 +366,8 @@ class JarvisAgentRunner:
             artifact_queue.create_pdf_report,
             artifact_queue.create_histogram_image,
             artifact_queue.create_csv_file,
+            artifact_queue.create_quality_report,
+            artifact_queue.create_quality_trend,
         ]
         agent = self._build_agent(
             chat_id=message.chat_id,

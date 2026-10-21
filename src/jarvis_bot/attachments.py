@@ -34,11 +34,19 @@ def extract_pdf_text(path: Path) -> str:
     return _truncate("\n".join(chunks))
 
 
+def load_table(path: Path):
+    """Load a CSV or Excel file into a pandas DataFrame."""
+    suffix = path.suffix.lower()
+    if suffix in {".xlsx", ".xls"}:
+        return pd.read_excel(path)
+    return pd.read_csv(path)
+
+
 def analyse_csv(path: Path) -> CsvInsight:
-    frame = pd.read_csv(path)
+    frame = load_table(path)
     head = frame.head(10).to_csv(index=False).strip()
     lines = [
-        f"CSV allegato: {path.name}",
+        f"Tabella allegata: {path.name}",
         f"Righe: {len(frame)}",
         f"Colonne: {', '.join(frame.columns.astype(str).tolist())}",
         "Anteprima:",
@@ -74,6 +82,8 @@ def default_user_instruction(message: IncomingMessage) -> str:
         kinds = {attachment.kind for attachment in message.attachments}
         if AttachmentType.CSV in kinds:
             return "Analizza il CSV allegato, spiega i dati in modo semplice e prepara anche un eventuale export PDF con istogrammi comprensibili."
+        if AttachmentType.XLSX in kinds:
+            return "Analizza il foglio Excel allegato, spiega i dati in modo semplice e prepara anche un eventuale export PDF con grafici comprensibili."
         if AttachmentType.PDF in kinds:
             return "Riassumi il PDF allegato, estrai i punti chiave e proponi un report PDF finale se utile."
         if AttachmentType.IMAGE in kinds:
@@ -106,10 +116,11 @@ def prepare_agent_input(message: IncomingMessage) -> PreparedAgentInput:
             except Exception as exc:  # pragma: no cover - defensive path
                 extracted = f"Impossibile estrarre il PDF: {exc}"
             prompt_sections.append(f"Contenuto estratto dal PDF {attachment.local_path.name}:\n{extracted}")
-        elif attachment.kind is AttachmentType.CSV:
+        elif attachment.kind is AttachmentType.CSV or attachment.kind is AttachmentType.XLSX:
             insight = analyse_csv(attachment.local_path)
             csv_paths.append(attachment.local_path)
             prompt_sections.append(insight.text)
+            prompt_sections.append(f"Percorso locale della tabella: {attachment.local_path}")
             if insight.histogram_data and not histogram_data:
                 histogram_data = insight.histogram_data
             infographic_descriptions.extend(insight.descriptions)

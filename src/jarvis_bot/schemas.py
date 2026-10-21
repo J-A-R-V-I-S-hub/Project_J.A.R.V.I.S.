@@ -13,6 +13,7 @@ class AttachmentType(str, Enum):
     IMAGE = "image"
     PDF = "pdf"
     CSV = "csv"
+    XLSX = "xlsx"
     DOCUMENT = "document"
 
 

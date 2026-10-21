@@ -176,6 +176,7 @@ def build_pdf_report(
     histogram_data: str | Iterable[tuple[str, float]] | None = None,
     infographic_descriptions: Iterable[str] | None = None,
     chart_spec: ChartSpec | None = None,
+    chart_specs: Iterable[ChartSpec] | None = None,
 ) -> Path:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -188,20 +189,25 @@ def build_pdf_report(
             story.append(Paragraph(cleaned, styles["BodyText"]))
             story.append(Spacer(1, 4 * mm))
 
-    resolved_spec = chart_spec
-    if resolved_spec is None and histogram_data:
+    specs: list[ChartSpec] = list(chart_specs or [])
+    if chart_spec is not None:
+        specs.insert(0, chart_spec)
+
+    if not specs and histogram_data:
         bars = normalise_histogram_data(histogram_data)
         if bars:
-            resolved_spec = ChartSpec(
-                title=histogram_title or "Istogramma",
-                labels=[label for label, _ in bars],
-                series=[ChartSeries(label="Valore", values=[value for _, value in bars])],
-                chart_type="bar",
+            specs.append(
+                ChartSpec(
+                    title=histogram_title or "Istogramma",
+                    labels=[label for label, _ in bars],
+                    series=[ChartSeries(label="Valore", values=[value for _, value in bars])],
+                    chart_type="bar",
+                )
             )
 
-    if resolved_spec is not None and resolved_spec.series:
-        chart_path = render_chart(output.with_suffix(".png"), resolved_spec)
-        story.append(Paragraph(escape(resolved_spec.title), styles["Heading2"]))
+    for index, spec in enumerate(specs):
+        chart_path = render_chart(output.with_name(f"{output.stem}-chart{index + 1}.png"), spec)
+        story.append(Paragraph(escape(spec.title), styles["Heading2"]))
         story.append(Spacer(1, 3 * mm))
         story.append(ReportImage(str(chart_path), width=165 * mm, height=92 * mm))
         story.append(Spacer(1, 4 * mm))
