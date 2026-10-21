@@ -16,6 +16,7 @@ from aiogram.types import FSInputFile, Message
 from .agent import ArtifactQueue, JarvisAgentRunner
 from .config import Settings
 from .integrations.weather import get_weather
+from .knowledge import format_hits, format_sources
 from .quality import (
     build_quality_artifacts,
     mark_quality_file,
@@ -49,7 +50,10 @@ HELP_TEXT = (
     "/reset — dimentica la conversazione corrente\n"
     "/stats — statistiche d'uso\n"
     "/files — ultimi file generati\n"
-    "/voice on|off — risposte vocali\n\n"
+    "/voice on|off — risposte vocali\n"
+    "/index [file] — indicizza documenti\n"
+    "/ask <domanda> — cerca nella knowledge base\n"
+    "/sources — documenti indicizzati\n\n"
     "**Cosa so fare**\n"
     "• rispondere e ricordare il contesto della chat\n"
     "• trascrivere audio e descrivere immagini\n"
@@ -77,6 +81,9 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_stats, Command("stats"))
         self.dispatcher.message.register(self.handle_files, Command("files"))
         self.dispatcher.message.register(self.handle_voice_mode, Command("voice"))
+        self.dispatcher.message.register(self.handle_index, Command("index"))
+        self.dispatcher.message.register(self.handle_ask, Command("ask"))
+        self.dispatcher.message.register(self.handle_sources, Command("sources"))
         self.dispatcher.message.register(self.handle_voice, F.voice)
         self.dispatcher.message.register(self.handle_audio, F.audio)
         self.dispatcher.message.register(self.handle_photo, F.photo)
@@ -160,6 +167,54 @@ class JarvisTelegramService:
         enabled = parts[1].strip().lower() in {"on", "si", "sì", "true", "1", "attiva", "attive"}
         state.set(message.chat.id, "voice_replies", "true" if enabled else "false")
         await message.answer("Risposte vocali attivate. 🔊" if enabled else "Risposte vocali disattivate. 🔇")
+
+    async def handle_index(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        knowledge = getattr(self.agent_runner, "knowledge", None)
+        if knowledge is None:
+            await message.answer("Knowledge base disabilitata.")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) == 1:
+            files, chunks = await asyncio.to_thread(knowledge.index_directory, self.settings.knowledge_path)
+            await message.answer(
+                f"Indicizzati {files} file ({chunks} chunk) da `{self.settings.knowledge_path}`."
+            )
+            return
+        target = parts[1].strip()
+        try:
+            chunks = await asyncio.to_thread(knowledge.index_file, target)
+        except Exception as exc:
+            await message.answer(f"Indicizzazione non riuscita: {exc}")
+            return
+        await message.answer(f"Documento indicizzato in {chunks} chunk: `{Path(target).name}`")
+
+    async def handle_ask(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        knowledge = getattr(self.agent_runner, "knowledge", None)
+        if knowledge is None:
+            await message.answer("Knowledge base disabilitata.")
+            return
+        query = (message.text or "").partition(" ")[2].strip()
+        if not query:
+            await message.answer("Uso: /ask <domanda>")
+            return
+        hits = await asyncio.to_thread(
+            knowledge.search, query, self.settings.knowledge_max_results
+        )
+        await self._reply_chunks(message, format_hits(hits))
+
+    async def handle_sources(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        knowledge = getattr(self.agent_runner, "knowledge", None)
+        if knowledge is None:
+            await message.answer("Knowledge base disabilitata.")
+            return
+        sources = await asyncio.to_thread(knowledge.list_sources)
+        await message.answer(format_sources(sources))
 
     def _recent_files(self, limit: int = 10) -> list[Path]:
         candidates: list[Path] = []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from agno.agent import Agent
@@ -19,11 +20,14 @@ from .app_state import AppStateStore
 from .attachments import prepare_agent_input
 from .config import Settings
 from .integrations.weather import get_weather
+from .knowledge import KnowledgeBase, format_hits, format_sources
 from .media import generate_image, synthesize_speech
 from .quality import build_quality_artifacts, record_snapshot, trend_spec
 from .reminders import ReminderStore
 from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
 from .schemas import ChartSeries, ChartSpec, IncomingMessage, PendingArtifact
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _coerce_chart_spec(spec: ChartSpec | dict | None) -> ChartSpec | None:
@@ -291,6 +295,36 @@ class JarvisAgentRunner:
         )
         self.reminders = ReminderStore(settings.app_db_path_obj, settings.timezone)
         self.app_state = AppStateStore(settings.app_db_path_obj)
+        self.knowledge = (
+            KnowledgeBase(settings.knowledge_db_path_obj, settings.knowledge_chunk_chars)
+            if settings.knowledge_enabled
+            else None
+        )
+
+    def _knowledge_tools(self) -> list[object]:
+        def search_knowledge(query: str, limit: int = 5) -> str:
+            """Cerca nella knowledge base locale (PDF, DOCX, CSV, Excel, testi) e cita le fonti."""
+            if self.knowledge is None:
+                return "Knowledge base disabilitata."
+            return format_hits(self.knowledge.search(query, limit=limit))
+
+        def index_document(path: str) -> str:
+            """Indicizza un documento locale nella knowledge base."""
+            if self.knowledge is None:
+                return "Knowledge base disabilitata."
+            try:
+                chunks = self.knowledge.index_file(path)
+            except Exception as exc:
+                return f"Indicizzazione non riuscita: {exc}"
+            return f"Documento indicizzato in {chunks} chunk: {path}"
+
+        def list_knowledge_sources() -> str:
+            """Elenca i documenti presenti nella knowledge base."""
+            if self.knowledge is None:
+                return "Knowledge base disabilitata."
+            return format_sources(self.knowledge.list_sources())
+
+        return [search_knowledge, index_document, list_knowledge_sources]
 
     def _reminder_tools(self, chat_id: int) -> list[object]:
         def create_reminder(text: str, due_at: str, recurrence: str = "none") -> str:
@@ -341,6 +375,7 @@ class JarvisAgentRunner:
             HackerNewsTools(),
             self._weather_tool(),
             *self._reminder_tools(chat_id),
+            *self._knowledge_tools(),
             *runtime_tools,
         ]
         if csv_paths:
@@ -399,6 +434,7 @@ class JarvisAgentRunner:
                 "Per analisi di difetti o tabelle qualità (prodotto × categorie) usa create_quality_report; per il trend usa create_quality_trend.",
                 "Se l'utente chiede di generare un'immagine usa create_image. Se chiede una risposta vocale usa create_voice_message.",
                 "Gestisci promemoria con create_reminder, list_reminders e cancel_reminder; usa il meteo con current_weather.",
+                "Per domande su documenti già inviati usa search_knowledge e cita sempre la fonte (nome file).",
                 "Per i CSV preferisci spiegazioni semplici, con istogrammi facili da leggere e un breve testo che descriva il significato dell'infografica.",
                 "Usa FileTools, PythonTools e ShellTools solo nelle sandbox previste.",
             ],
@@ -423,6 +459,12 @@ class JarvisAgentRunner:
 
     def run(self, message: IncomingMessage, artifact_queue: ArtifactQueue) -> str:
         prepared = prepare_agent_input(message)
+        if self.knowledge is not None:
+            for document_path in prepared.document_paths:
+                try:
+                    self.knowledge.index_file(document_path)
+                except Exception:
+                    LOGGER.warning("Could not index attachment %s", document_path, exc_info=True)
         runtime_tools = [
             artifact_queue.send_local_file,
             artifact_queue.create_chart,

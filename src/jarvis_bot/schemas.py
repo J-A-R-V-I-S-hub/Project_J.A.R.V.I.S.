@@ -45,6 +45,7 @@ class PreparedAgentInput:
     prompt: str
     images: list[Any] = field(default_factory=list)
     csv_paths: list[Path] = field(default_factory=list)
+    document_paths: list[Path] = field(default_factory=list)
     histogram_data: list[tuple[str, float]] = field(default_factory=list)
     infographic_descriptions: list[str] = field(default_factory=list)
 

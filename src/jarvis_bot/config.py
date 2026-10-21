@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     image_model: str = Field(default="gpt-image-1", alias="JARVIS_IMAGE_MODEL")
     voice_reply_max_chars: int = Field(default=1500, alias="JARVIS_VOICE_MAX_CHARS")
 
+    # Knowledge base (SQLite FTS5, no external vector DB required)
+    knowledge_db_path: str = Field(default="data/knowledge.db", alias="JARVIS_KNOWLEDGE_DB_PATH")
+    knowledge_dir: str = Field(default="data/knowledge", alias="JARVIS_KNOWLEDGE_DIR")
+    knowledge_enabled: bool = Field(default=True, alias="JARVIS_KNOWLEDGE_ENABLED")
+    knowledge_chunk_chars: int = Field(default=1200, alias="JARVIS_KNOWLEDGE_CHUNK_CHARS")
+    knowledge_max_results: int = Field(default=5, alias="JARVIS_KNOWLEDGE_MAX_RESULTS")
+
     @property
     def db_path(self) -> Path:
         return Path(self.agno_db_path)
@@ -98,6 +105,14 @@ class Settings(BaseSettings):
     def quality_watch_path(self) -> Path:
         return Path(self.quality_watch_dir)
 
+    @property
+    def knowledge_db_path_obj(self) -> Path:
+        return Path(self.knowledge_db_path)
+
+    @property
+    def knowledge_path(self) -> Path:
+        return Path(self.knowledge_dir)
+
     def ensure_directories(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.app_db_path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +124,8 @@ class Settings(BaseSettings):
             self.python_sandbox_path,
             self.shell_sandbox_path,
             self.quality_watch_path,
+            self.knowledge_path,
+            self.knowledge_db_path_obj.parent,
         ):
             path.mkdir(parents=True, exist_ok=True)
 

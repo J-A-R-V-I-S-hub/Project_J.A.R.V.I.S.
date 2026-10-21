@@ -100,6 +100,7 @@ def prepare_agent_input(message: IncomingMessage) -> PreparedAgentInput:
     ]
     images: list[Image] = []
     csv_paths: list[Path] = []
+    document_paths: list[Path] = []
     histogram_data: list[tuple[str, float]] = []
     infographic_descriptions: list[str] = []
 
@@ -107,6 +108,8 @@ def prepare_agent_input(message: IncomingMessage) -> PreparedAgentInput:
         prompt_sections.append("Trascrizione audio:\n" + _truncate(message.audio_transcript))
 
     for attachment in message.attachments:
+        if attachment.kind is not AttachmentType.AUDIO:
+            document_paths.append(attachment.local_path)
         if attachment.kind is AttachmentType.IMAGE:
             images.append(Image(filepath=str(attachment.local_path)))
             prompt_sections.append(f"Immagine allegata disponibile in locale: {attachment.local_path.name}")
@@ -133,6 +136,7 @@ def prepare_agent_input(message: IncomingMessage) -> PreparedAgentInput:
         prompt="\n\n".join(section for section in prompt_sections if section.strip()),
         images=images,
         csv_paths=csv_paths,
+        document_paths=document_paths,
         histogram_data=histogram_data,
         infographic_descriptions=infographic_descriptions,
     )
