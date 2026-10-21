@@ -486,14 +486,19 @@ class JarvisAgentRunner:
         if csv_paths:
             tools.append(CsvTools(csvs=csv_paths))
         if self.settings.browserbase_api_key and self.settings.browserbase_project_id:
-            from agno.tools.browserbase import BrowserbaseTools
-
-            tools.append(
-                BrowserbaseTools(
-                    api_key=self.settings.browserbase_api_key,
-                    project_id=self.settings.browserbase_project_id,
+            try:
+                from agno.tools.browserbase import BrowserbaseTools
+            except ImportError:
+                LOGGER.warning(
+                    "Browserbase configurato ma dipendenza mancante: installa con pip install -e '.[browser]'"
                 )
-            )
+            else:
+                tools.append(
+                    BrowserbaseTools(
+                        api_key=self.settings.browserbase_api_key,
+                        project_id=self.settings.browserbase_project_id,
+                    )
+                )
         return tools
 
     @staticmethod

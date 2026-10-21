@@ -54,6 +54,9 @@ HELP_TEXT = (
     "/index [file] — indicizza documenti\n"
     "/ask <domanda> — cerca nella knowledge base\n"
     "/sources — documenti indicizzati\n\n"
+    "/brief — brief di oggi su richiesta\n"
+    "/reminders — promemoria attivi\n"
+    "/quality <file> — analisi difetti CSV/Excel\n\n"
     "**Cosa so fare**\n"
     "• rispondere e ricordare il contesto della chat\n"
     "• trascrivere audio e descrivere immagini\n"
@@ -84,6 +87,9 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_index, Command("index"))
         self.dispatcher.message.register(self.handle_ask, Command("ask"))
         self.dispatcher.message.register(self.handle_sources, Command("sources"))
+        self.dispatcher.message.register(self.handle_brief, Command("brief"))
+        self.dispatcher.message.register(self.handle_reminders, Command("reminders"))
+        self.dispatcher.message.register(self.handle_quality, Command("quality"))
         self.dispatcher.message.register(self.handle_voice, F.voice)
         self.dispatcher.message.register(self.handle_audio, F.audio)
         self.dispatcher.message.register(self.handle_photo, F.photo)
@@ -215,6 +221,51 @@ class JarvisTelegramService:
             return
         sources = await asyncio.to_thread(knowledge.list_sources)
         await message.answer(format_sources(sources))
+
+    async def handle_brief(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        now = datetime.now(ZoneInfo(self.settings.timezone))
+        brief = await asyncio.to_thread(self._build_daily_brief, now)
+        await self._reply_chunks(message, brief)
+
+    async def handle_reminders(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        store = self._reminder_store
+        if store is None:
+            await message.answer("Promemoria non disponibili con questo runner.")
+            return
+        reminders = await asyncio.to_thread(store.list, message.chat.id)
+        await message.answer(store.format_list(reminders))
+
+    async def handle_quality(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) == 1:
+            await message.answer(
+                "Uso: `/quality <percorso CSV/Excel>`. "
+                f"Oppure metti il file in `{self.settings.quality_watch_path}` e verrà analizzato automaticamente."
+            )
+            return
+        target = parts[1].strip()
+        try:
+            report, artifacts = await asyncio.to_thread(
+                build_quality_artifacts,
+                target,
+                self.settings.output_path,
+                self.settings.reports_path,
+            )
+            await asyncio.to_thread(record_snapshot, self.settings.app_db_path_obj, report)
+        except Exception as exc:
+            await message.answer(f"Analisi qualità non riuscita: {exc}")
+            return
+        await self._reply_chunks(message, report.summary)
+        await self._deliver_artifacts(
+            message.chat.id,
+            [PendingArtifact(local_path=artifact, caption=f"Qualità — {Path(target).name}") for artifact in artifacts],
+        )
 
     def _recent_files(self, limit: int = 10) -> list[Path]:
         candidates: list[Path] = []

@@ -10,7 +10,8 @@ class AppStateStore:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        connection = self._connect()
+        try:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chat_state (
@@ -21,6 +22,9 @@ class AppStateStore:
                 )
                 """
             )
+            connection.commit()
+        finally:
+            connection.close()
 
     def _connect(self):
         connection = sqlite3.connect(self.db_path, timeout=10)

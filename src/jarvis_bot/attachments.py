@@ -10,6 +10,7 @@ from pypdf import PdfReader
 from .schemas import AttachmentType, IncomingMessage, PreparedAgentInput
 
 MAX_TEXT_CHARS = 6000
+INDEXABLE_SUFFIXES = {".pdf", ".docx", ".txt", ".md", ".csv", ".xlsx", ".xls", ".json"}
 
 
 @dataclass(slots=True)
@@ -108,7 +109,7 @@ def prepare_agent_input(message: IncomingMessage) -> PreparedAgentInput:
         prompt_sections.append("Trascrizione audio:\n" + _truncate(message.audio_transcript))
 
     for attachment in message.attachments:
-        if attachment.kind is not AttachmentType.AUDIO:
+        if attachment.kind is not AttachmentType.AUDIO and attachment.local_path.suffix.lower() in INDEXABLE_SUFFIXES:
             document_paths.append(attachment.local_path)
         if attachment.kind is AttachmentType.IMAGE:
             images.append(Image(filepath=str(attachment.local_path)))
