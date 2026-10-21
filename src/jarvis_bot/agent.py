@@ -19,6 +19,10 @@ from agno.tools.websearch import WebSearchTools
 from .app_state import AppStateStore
 from .attachments import prepare_agent_input
 from .config import Settings
+from .integrations.calendar import upcoming_events
+from .integrations.email import EmailClient
+from .integrations.github import GitHubClient
+from .integrations.notion import NotionClient
 from .integrations.weather import get_weather
 from .knowledge import KnowledgeBase, format_hits, format_sources
 from .media import generate_image, synthesize_speech
@@ -365,6 +369,96 @@ class JarvisAgentRunner:
 
         return current_weather
 
+    def _integration_tools(self) -> list[object]:
+        tools: list[object] = []
+
+        if self.settings.github_token:
+            github = GitHubClient(self.settings.github_token, self.settings.github_default_repo)
+
+            def list_github_issues(repo: str = "", state: str = "open", limit: int = 10) -> str:
+                """Elenca le issue di un repository GitHub (repo vuoto = repo predefinito)."""
+                return github.list_issues(repo or None, state, limit)
+
+            def list_github_pulls(repo: str = "", state: str = "open", limit: int = 10) -> str:
+                """Elenca le pull request di un repository GitHub."""
+                return github.list_pull_requests(repo or None, state, limit)
+
+            def github_repo_summary(repo: str = "") -> str:
+                """Mostra un riepilogo di un repository GitHub."""
+                return github.repo_summary(repo or None)
+
+            def search_github_issues(query: str, repo: str = "", limit: int = 5) -> str:
+                """Cerca issue e pull request su GitHub."""
+                return github.search_issues(query, repo or None, limit)
+
+            def create_github_issue(title: str, body: str = "", repo: str = "") -> str:
+                """Crea una issue su GitHub."""
+                return github.create_issue(title, body, repo or None)
+
+            tools.extend(
+                [
+                    list_github_issues,
+                    list_github_pulls,
+                    github_repo_summary,
+                    search_github_issues,
+                    create_github_issue,
+                ]
+            )
+
+        if (
+            self.settings.email_imap_host
+            and self.settings.email_smtp_host
+            and self.settings.email_username
+            and self.settings.email_password
+        ):
+            email_client = EmailClient(
+                self.settings.email_imap_host,
+                self.settings.email_imap_port,
+                self.settings.email_smtp_host,
+                self.settings.email_smtp_port,
+                self.settings.email_username,
+                self.settings.email_password,
+                self.settings.email_from,
+            )
+
+            def list_unread_email(limit: int = 10) -> str:
+                """Elenca le email non lette."""
+                return email_client.list_unread(limit)
+
+            def search_email(query: str, limit: int = 10) -> str:
+                """Cerca email per testo."""
+                return email_client.search(query, limit)
+
+            def send_email(to: str, subject: str, body: str) -> str:
+                """Invia una email."""
+                return email_client.send(to, subject, body)
+
+            tools.extend([list_unread_email, search_email, send_email])
+
+        if self.settings.calendar_ics_url:
+            calendar_source = self.settings.calendar_ics_url
+
+            def upcoming_calendar(limit: int = 10) -> str:
+                """Mostra i prossimi eventi del calendario configurato."""
+                return upcoming_events(calendar_source, self.settings.timezone, limit)
+
+            tools.append(upcoming_calendar)
+
+        if self.settings.notion_token:
+            notion = NotionClient(self.settings.notion_token, self.settings.notion_database_id)
+
+            def notion_search(query: str = "", limit: int = 5) -> str:
+                """Cerca pagine e database su Notion."""
+                return notion.search(query, limit)
+
+            def notion_add_note(title: str, content: str = "") -> str:
+                """Crea una pagina/nota nel database Notion configurato."""
+                return notion.add_note(title, content)
+
+            tools.extend([notion_search, notion_add_note])
+
+        return tools
+
     def _build_tools(self, chat_id: int, csv_paths: list[Path], runtime_tools: list[object]) -> list[object]:
         tools: list[object] = [
             FileTools(base_dir=self.settings.workspace_path, enable_delete_file=False),
@@ -376,6 +470,7 @@ class JarvisAgentRunner:
             self._weather_tool(),
             *self._reminder_tools(chat_id),
             *self._knowledge_tools(),
+            *self._integration_tools(),
             *runtime_tools,
         ]
         if csv_paths:
@@ -435,6 +530,7 @@ class JarvisAgentRunner:
                 "Se l'utente chiede di generare un'immagine usa create_image. Se chiede una risposta vocale usa create_voice_message.",
                 "Gestisci promemoria con create_reminder, list_reminders e cancel_reminder; usa il meteo con current_weather.",
                 "Per domande su documenti già inviati usa search_knowledge e cita sempre la fonte (nome file).",
+                "Se sono disponibili, usa i tool GitHub, email, calendario e Notion per azioni concrete; non inventare dati che non puoi verificare.",
                 "Per i CSV preferisci spiegazioni semplici, con istogrammi facili da leggere e un breve testo che descriva il significato dell'infografica.",
                 "Usa FileTools, PythonTools e ShellTools solo nelle sandbox previste.",
             ],

@@ -69,6 +69,20 @@ class Settings(BaseSettings):
     knowledge_chunk_chars: int = Field(default=1200, alias="JARVIS_KNOWLEDGE_CHUNK_CHARS")
     knowledge_max_results: int = Field(default=5, alias="JARVIS_KNOWLEDGE_MAX_RESULTS")
 
+    # Optional integrations (enabled only when credentials are present)
+    github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
+    github_default_repo: str | None = Field(default=None, alias="GITHUB_DEFAULT_REPO")
+    notion_token: str | None = Field(default=None, alias="NOTION_TOKEN")
+    notion_database_id: str | None = Field(default=None, alias="NOTION_DATABASE_ID")
+    calendar_ics_url: str | None = Field(default=None, alias="CALENDAR_ICS_URL")
+    email_imap_host: str | None = Field(default=None, alias="EMAIL_IMAP_HOST")
+    email_imap_port: int = Field(default=993, alias="EMAIL_IMAP_PORT")
+    email_smtp_host: str | None = Field(default=None, alias="EMAIL_SMTP_HOST")
+    email_smtp_port: int = Field(default=587, alias="EMAIL_SMTP_PORT")
+    email_username: str | None = Field(default=None, alias="EMAIL_USERNAME")
+    email_password: str | None = Field(default=None, alias="EMAIL_PASSWORD")
+    email_from: str | None = Field(default=None, alias="EMAIL_FROM")
+
     @property
     def db_path(self) -> Path:
         return Path(self.agno_db_path)
