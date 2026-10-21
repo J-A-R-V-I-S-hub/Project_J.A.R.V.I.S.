@@ -26,6 +26,7 @@ from .integrations.notion import NotionClient
 from .integrations.weather import get_weather
 from .knowledge import KnowledgeBase, format_hits, format_sources
 from .media import generate_image, synthesize_speech
+from .plugins import PluginContext, PluginRegistry
 from .quality import build_quality_artifacts, record_snapshot, trend_spec
 from .reminders import ReminderStore
 from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
@@ -304,6 +305,8 @@ class JarvisAgentRunner:
             if settings.knowledge_enabled
             else None
         )
+        self.plugins = PluginRegistry()
+        self.plugins.load_entry_points()
 
     def _knowledge_tools(self) -> list[object]:
         def search_knowledge(query: str, limit: int = 5) -> str:
@@ -459,7 +462,13 @@ class JarvisAgentRunner:
 
         return tools
 
-    def _build_tools(self, chat_id: int, csv_paths: list[Path], runtime_tools: list[object]) -> list[object]:
+    def _build_tools(
+        self,
+        chat_id: int,
+        csv_paths: list[Path],
+        runtime_tools: list[object],
+        extra_tools: list[object] | None = None,
+    ) -> list[object]:
         tools: list[object] = [
             FileTools(base_dir=self.settings.workspace_path, enable_delete_file=False),
             LocalFileSystemTools(target_directory=str(self.settings.output_path)),
@@ -472,6 +481,7 @@ class JarvisAgentRunner:
             *self._knowledge_tools(),
             *self._integration_tools(),
             *runtime_tools,
+            *(extra_tools or []),
         ]
         if csv_paths:
             tools.append(CsvTools(csvs=csv_paths))
@@ -501,7 +511,11 @@ class JarvisAgentRunner:
         csv_paths: list[Path],
         runtime_tools: list[object],
         vision_enabled: bool,
+        artifact_queue: ArtifactQueue | None = None,
     ) -> Agent:
+        plugin_tools, plugin_instructions = self.plugins.build(
+            PluginContext(self.settings, chat_id, artifact_queue)
+        )
         model_id = self.settings.openrouter_vision_model if vision_enabled else self.settings.openrouter_model
         return Agent(
             name="Jarvis",
@@ -520,7 +534,7 @@ class JarvisAgentRunner:
             tool_call_limit=self.settings.agent_tool_call_limit,
             retries=self.settings.agent_retries,
             markdown=True,
-            tools=self._build_tools(chat_id, csv_paths, runtime_tools),
+            tools=self._build_tools(chat_id, csv_paths, runtime_tools, plugin_tools),
             instructions=[
                 "Sei Jarvis, un assistente personale privato, proattivo e preciso.",
                 "Quando l'utente invia un audio usa la trascrizione come fonte primaria e cita eventuali incertezze.",
@@ -533,6 +547,7 @@ class JarvisAgentRunner:
                 "Se sono disponibili, usa i tool GitHub, email, calendario e Notion per azioni concrete; non inventare dati che non puoi verificare.",
                 "Per i CSV preferisci spiegazioni semplici, con istogrammi facili da leggere e un breve testo che descriva il significato dell'infografica.",
                 "Usa FileTools, PythonTools e ShellTools solo nelle sandbox previste.",
+                *plugin_instructions,
             ],
         )
 
@@ -578,6 +593,7 @@ class JarvisAgentRunner:
             csv_paths=prepared.csv_paths,
             runtime_tools=runtime_tools,
             vision_enabled=bool(prepared.images),
+            artifact_queue=artifact_queue,
         )
         response = agent.run(
             input=prepared.prompt,
