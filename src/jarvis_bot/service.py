@@ -11,6 +11,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message
 
@@ -121,12 +122,12 @@ class JarvisTelegramService:
     async def handle_start(self, message: Message) -> None:
         if not self._guard(message):
             return
-        await message.answer(HELP_TEXT)
+        await message.answer(HELP_TEXT, parse_mode="Markdown")
 
     async def handle_help(self, message: Message) -> None:
         if not self._guard(message):
             return
-        await message.answer(HELP_TEXT)
+        await message.answer(HELP_TEXT, parse_mode="Markdown")
 
     async def handle_reset(self, message: Message) -> None:
         if not self._guard(message):
@@ -142,7 +143,7 @@ class JarvisTelegramService:
         if not self._guard(message):
             return
         stats = await asyncio.to_thread(collect_stats, self.settings.db_path)
-        await message.answer(format_stats(stats))
+        await message.answer(format_stats(stats), parse_mode="Markdown")
 
     async def handle_files(self, message: Message) -> None:
         if not self._guard(message):
@@ -156,7 +157,7 @@ class JarvisTelegramService:
             size_kb = max(1, path.stat().st_size // 1024)
             moment = datetime.fromtimestamp(path.stat().st_mtime).strftime("%d/%m %H:%M")
             lines.append(f"• `{path.name}` — {size_kb} KB — {moment}")
-        await message.answer("\n".join(lines))
+        await message.answer("\n".join(lines), parse_mode="Markdown")
 
     async def handle_voice_mode(self, message: Message) -> None:
         if not self._guard(message):
@@ -169,7 +170,7 @@ class JarvisTelegramService:
         if len(parts) == 1:
             enabled = state.get_bool(message.chat.id, "voice_replies", False)
             status = "attive" if enabled else "disattive"
-            await message.answer(f"Risposte vocali: **{status}**.\nUsa /voice on oppure /voice off.")
+            await message.answer(f"Risposte vocali: **{status}**.\nUsa /voice on oppure /voice off.", parse_mode="Markdown")
             return
         enabled = parts[1].strip().lower() in {"on", "si", "sì", "true", "1", "attiva", "attive"}
         state.set(message.chat.id, "voice_replies", "true" if enabled else "false")
@@ -211,7 +212,7 @@ class JarvisTelegramService:
         hits = await asyncio.to_thread(
             knowledge.search, query, self.settings.knowledge_max_results
         )
-        await self._reply_chunks(message, format_hits(hits))
+        await self._reply_chunks(message, format_hits(hits), parse_mode="Markdown")
 
     async def handle_sources(self, message: Message) -> None:
         if not self._guard(message):
@@ -221,14 +222,14 @@ class JarvisTelegramService:
             await message.answer("Knowledge base disabilitata.")
             return
         sources = await asyncio.to_thread(knowledge.list_sources)
-        await message.answer(format_sources(sources))
+        await message.answer(format_sources(sources), parse_mode="Markdown")
 
     async def handle_brief(self, message: Message) -> None:
         if not self._guard(message):
             return
         now = datetime.now(ZoneInfo(self.settings.timezone))
         brief = await asyncio.to_thread(self._build_daily_brief, now)
-        await self._reply_chunks(message, brief)
+        await self._reply_chunks(message, brief, parse_mode="Markdown")
 
     async def handle_reminders(self, message: Message) -> None:
         if not self._guard(message):
@@ -238,7 +239,7 @@ class JarvisTelegramService:
             await message.answer("Promemoria non disponibili con questo runner.")
             return
         reminders = await asyncio.to_thread(store.list, message.chat.id)
-        await message.answer(store.format_list(reminders))
+        await message.answer(store.format_list(reminders), parse_mode="Markdown")
 
     async def handle_quality(self, message: Message) -> None:
         if not self._guard(message):
@@ -508,7 +509,7 @@ class JarvisTelegramService:
                         "jarvis-reply.ogg",
                         "Risposta vocale",
                     )
-                await self._reply_chunks(message, reply_text)
+                await self._reply_chunks(message, reply_text, parse_mode="Markdown")
                 await self._deliver_artifacts(message.chat.id, artifact_queue.items)
             except Exception:
                 LOGGER.exception("Failed to process message %s", message.message_id)
@@ -572,10 +573,18 @@ class JarvisTelegramService:
             original_name=original_name,
         )
 
-    async def _reply_chunks(self, message: Message, text: str) -> None:
+    async def _reply_chunks(self, message: Message, text: str, parse_mode: str | None = None) -> None:
         clean = text.strip() or "Operazione completata."
         for start in range(0, len(clean), TELEGRAM_MESSAGE_LIMIT):
-            await message.answer(clean[start : start + TELEGRAM_MESSAGE_LIMIT])
+            chunk = clean[start : start + TELEGRAM_MESSAGE_LIMIT]
+            if parse_mode is None:
+                await message.answer(chunk)
+                continue
+            try:
+                await message.answer(chunk, parse_mode=parse_mode)
+            except TelegramBadRequest:
+                # LLM output may contain malformed Markdown: fall back to plain text.
+                await message.answer(chunk)
 
     async def _deliver_artifacts(self, chat_id: int, artifacts: list[PendingArtifact]) -> None:
         for artifact in artifacts:

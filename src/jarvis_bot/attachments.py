@@ -122,7 +122,8 @@ def prepare_agent_input(message: IncomingMessage) -> PreparedAgentInput:
             prompt_sections.append(f"Contenuto estratto dal PDF {attachment.local_path.name}:\n{extracted}")
         elif attachment.kind is AttachmentType.CSV or attachment.kind is AttachmentType.XLSX:
             insight = analyse_csv(attachment.local_path)
-            csv_paths.append(attachment.local_path)
+            if attachment.kind is AttachmentType.CSV:
+                csv_paths.append(attachment.local_path)
             prompt_sections.append(insight.text)
             prompt_sections.append(f"Percorso locale della tabella: {attachment.local_path}")
             if insight.histogram_data and not histogram_data:
