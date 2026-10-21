@@ -176,7 +176,11 @@ class JarvisTelegramService:
                         await self._reply_chunks(message, f"Trascrizione audio:\n\n{transcript}")
                         break
 
-                    artifact_queue = ArtifactQueue(self.settings.output_path, self.settings.reports_path)
+                    artifact_queue = ArtifactQueue(
+                        self.settings.output_path,
+                        self.settings.reports_path,
+                        self.settings.workspace_path,
+                    )
                     async with self._run_semaphore:
                         reply_text = await asyncio.to_thread(self.agent_runner.run, incoming, artifact_queue)
                     await self._reply_chunks(message, reply_text)

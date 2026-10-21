@@ -30,12 +30,26 @@ def _coerce_chart_spec(spec: ChartSpec | dict | None) -> ChartSpec | None:
 class ArtifactQueue:
     """Collect files the agent wants to send back to Telegram."""
 
-    def __init__(self, output_dir: Path, reports_dir: Path) -> None:
+    def __init__(self, output_dir: Path, reports_dir: Path, workspace_dir: Path | None = None) -> None:
         self.output_dir = output_dir
         self.reports_dir = reports_dir
+        self.workspace_dir = workspace_dir
         self.items: list[PendingArtifact] = []
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
+        self._allowed_roots = [self.output_dir.resolve(), self.reports_dir.resolve()]
+        if self.workspace_dir is not None:
+            self._allowed_roots.append(self.workspace_dir.resolve())
+
+    def _ensure_allowed(self, path: Path) -> Path:
+        resolved = path.expanduser().resolve()
+        if not any(resolved.is_relative_to(root) for root in self._allowed_roots):
+            raise ValueError(
+                f"Percorso non consentito: {resolved}. Posso inviare solo file da output, reports o workspace."
+            )
+        if resolved.name.startswith(".") or resolved.suffix.lower() in {".db", ".sqlite", ".sqlite3", ".pem", ".key"}:
+            raise ValueError(f"Per motivi di sicurezza non invio il file: {resolved.name}")
+        return resolved
 
     def _queue_if_requested(self, path: Path, caption: str, queue_for_delivery: bool) -> None:
         if queue_for_delivery:
@@ -45,6 +59,10 @@ class ArtifactQueue:
         path = Path(local_path).expanduser().resolve()
         if not path.exists():
             return f"File non trovato: {path}"
+        try:
+            path = self._ensure_allowed(path)
+        except ValueError as exc:
+            return str(exc)
         self.items.append(PendingArtifact(local_path=path, caption=caption))
         return f"File accodato per l'invio su Telegram: {path.name}"
 

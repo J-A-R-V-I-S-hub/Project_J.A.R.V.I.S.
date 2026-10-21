@@ -221,6 +221,7 @@ __marimo__/
 .DS_Store
 .env
 data/
+.git-rewrite/
 /*-voice-*.ogg
 /*-photo-*.jpg
 /infografica_*.png

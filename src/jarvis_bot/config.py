@@ -84,7 +84,15 @@ class Settings(BaseSettings):
             path.mkdir(parents=True, exist_ok=True)
 
     def validate_required_secrets(self) -> None:
-        if self.telegram_bot_token == "__set_in_env__":
-            raise RuntimeError("Set TELEGRAM_BOT_TOKEN in the environment or in .env")
-        if self.openrouter_api_key == "__set_in_env__":
-            raise RuntimeError("Set OPENROUTER_API_KEY in the environment or in .env")
+        missing = [
+            name
+            for name, value in (
+                ("TELEGRAM_BOT_TOKEN", self.telegram_bot_token),
+                ("OPENROUTER_API_KEY", self.openrouter_api_key),
+            )
+            if not value or value == "__set_in_env__" or value.startswith("__")
+        ]
+        if missing:
+            raise RuntimeError(
+                "Valori mancanti in .env: " + ", ".join(missing)
+            )

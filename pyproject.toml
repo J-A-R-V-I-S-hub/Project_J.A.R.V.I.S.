@@ -16,10 +16,12 @@ dependencies = [
   "httpx>=0.28.0",
   "matplotlib>=3.9.0",
   "openai>=1.55.0",
+  "openpyxl>=3.1.0",
   "pandas>=2.2.0",
   "pydantic>=2.9.0",
   "pydantic-settings>=2.5.0",
   "pypdf>=5.0.0",
+  "python-docx>=1.1.0",
   "python-dotenv>=1.0.1",
   "reportlab>=4.2.0",
   "sqlalchemy>=2.0.36",
@@ -30,6 +32,10 @@ dev = [
   "pytest>=8.3.0",
   "pytest-asyncio>=0.24.0",
 ]
+browser = ["browserbase>=1.0.0"]
+
+[project.scripts]
+jarvis = "jarvis_bot.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
