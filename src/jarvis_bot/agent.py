@@ -138,17 +138,39 @@ class JarvisAgentRunner:
             )
         return tools
 
-    def _build_agent(self, user_id: str, csv_paths: list[Path], runtime_tools: list[object], vision_enabled: bool) -> Agent:
+    @staticmethod
+    def session_id_for(chat_id: int) -> str:
+        return f"telegram:{chat_id}"
+
+    def reset_session(self, chat_id: int) -> bool:
+        """Forget the conversation history for a Telegram chat."""
+        return self.db.delete_session(self.session_id_for(chat_id))
+
+    def _build_agent(
+        self,
+        chat_id: int,
+        user_id: str,
+        csv_paths: list[Path],
+        runtime_tools: list[object],
+        vision_enabled: bool,
+    ) -> Agent:
         model_id = self.settings.openrouter_vision_model if vision_enabled else self.settings.openrouter_model
         return Agent(
             name="Jarvis",
             user_id=user_id,
+            session_id=self.session_id_for(chat_id),
             db=self.db,
             model=OpenRouterResponses(id=model_id),
             memory_manager=self.memory_manager,
             enable_agentic_memory=True,
             add_history_to_context=True,
-            num_history_runs=5,
+            num_history_runs=self.settings.agent_history_runs,
+            enable_session_summaries=True,
+            add_session_summary_to_context=True,
+            add_datetime_to_context=True,
+            timezone_identifier=self.settings.timezone,
+            tool_call_limit=self.settings.agent_tool_call_limit,
+            retries=self.settings.agent_retries,
             markdown=True,
             tools=self._build_tools(csv_paths, runtime_tools),
             instructions=[
@@ -187,6 +209,7 @@ class JarvisAgentRunner:
             artifact_queue.create_csv_file,
         ]
         agent = self._build_agent(
+            chat_id=message.chat_id,
             user_id=f"telegram:{message.user_id}",
             csv_paths=prepared.csv_paths,
             runtime_tools=runtime_tools,

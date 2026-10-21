@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     browserbase_project_id: str | None = Field(default=None, alias="BROWSERBASE_PROJECT_ID")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
+    # Agent behaviour
+    timezone: str = Field(default="Europe/Rome", alias="JARVIS_TIMEZONE")
+    agent_history_runs: int = Field(default=8, alias="JARVIS_HISTORY_RUNS")
+    agent_tool_call_limit: int = Field(default=10, alias="JARVIS_TOOL_CALL_LIMIT")
+    agent_retries: int = Field(default=1, alias="JARVIS_AGENT_RETRIES")
+    max_concurrent_runs: int = Field(default=1, alias="JARVIS_MAX_CONCURRENT_RUNS")
+
     @property
     def db_path(self) -> Path:
         return Path(self.agno_db_path)

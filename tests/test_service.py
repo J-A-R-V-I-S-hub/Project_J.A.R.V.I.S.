@@ -1,3 +1,4 @@
+from jarvis_bot.agent import JarvisAgentRunner
 from jarvis_bot.config import Settings
 from jarvis_bot.service import JarvisTelegramService
 
@@ -33,3 +34,8 @@ def test_extract_text_prefers_caption_or_text() -> None:
         caption = "ciao"
 
     assert service._extract_user_text(FakeMessage()) == "ciao"
+
+
+def test_session_id_is_stable_per_chat() -> None:
+    assert JarvisAgentRunner.session_id_for(42) == "telegram:42"
+    assert JarvisAgentRunner.session_id_for(42) == JarvisAgentRunner.session_id_for(42)
