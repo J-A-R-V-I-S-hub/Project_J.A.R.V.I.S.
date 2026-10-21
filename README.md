@@ -45,7 +45,7 @@ Per partire in polling:
 
 ```bash
 source .venv/bin/activate
-python -m jarvis_bot.main
+python -m src.jarvis_bot.main
 ```
 
 ## Test
