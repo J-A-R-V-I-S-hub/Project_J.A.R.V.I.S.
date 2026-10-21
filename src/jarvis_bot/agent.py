@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from agno.agent import Agent
@@ -18,8 +17,14 @@ from agno.tools.websearch import WebSearchTools
 
 from .attachments import prepare_agent_input
 from .config import Settings
-from .reporting import build_pdf_report, create_histogram_png, slugify_filename, write_csv_file
-from .schemas import IncomingMessage, PendingArtifact
+from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
+from .schemas import ChartSeries, ChartSpec, IncomingMessage, PendingArtifact
+
+
+def _coerce_chart_spec(spec: ChartSpec | dict | None) -> ChartSpec | None:
+    if spec is None or isinstance(spec, ChartSpec):
+        return spec
+    return ChartSpec.model_validate(spec)
 
 
 class ArtifactQueue:
@@ -47,13 +52,17 @@ class ArtifactQueue:
         self,
         title: str,
         body: str,
-        chart_data_json: str = "",
-        chart_title: str = "Istogramma",
+        chart_spec: ChartSpec | None = None,
         infographic_description: str = "",
         file_name: str = "jarvis-report.pdf",
         caption: str = "",
         queue_for_delivery: bool = True,
     ) -> str:
+        """Crea un report PDF con testo e, opzionalmente, un grafico.
+
+        `chart_spec` è una specifica tipizzata:
+        {"title": "...", "labels": ["A","B"], "series": [{"label":"Valore","values":[1,2]}], "chart_type": "bar"}
+        """
         safe_name = slugify_filename(file_name, "jarvis-report.pdf")
         if not safe_name.endswith(".pdf"):
             safe_name += ".pdf"
@@ -63,28 +72,51 @@ class ArtifactQueue:
             report_path,
             title=title,
             summary=body,
-            histogram_title=chart_title,
-            histogram_data=chart_data_json or None,
+            chart_spec=_coerce_chart_spec(chart_spec),
             infographic_descriptions=descriptions,
         )
         self._queue_if_requested(report_path, caption or title, queue_for_delivery)
         return str(report_path)
 
-    def create_histogram_image(
+    def create_chart(
         self,
-        title: str,
-        chart_data_json: str,
+        spec: ChartSpec | dict,
         file_name: str = "jarvis-chart.png",
         caption: str = "",
         queue_for_delivery: bool = True,
     ) -> str:
+        """Crea un grafico PNG (barre, barre raggruppate, linee, torta o Pareto).
+
+        `spec` è una specifica tipizzata:
+        {"title": "...", "labels": ["A","B"], "series": [{"label":"Valore","values":[1,2]}], "chart_type": "grouped_bar"}
+        """
+        typed_spec = _coerce_chart_spec(spec)
+        assert typed_spec is not None
         safe_name = slugify_filename(file_name, "jarvis-chart.png")
         if not safe_name.endswith(".png"):
             safe_name += ".png"
         image_path = self.output_dir / safe_name
-        create_histogram_png(image_path, title=title, chart_data=chart_data_json)
-        self._queue_if_requested(image_path, caption or title, queue_for_delivery)
+        render_chart(image_path, typed_spec)
+        self._queue_if_requested(image_path, caption or typed_spec.title, queue_for_delivery)
         return str(image_path)
+
+    def create_histogram_image(
+        self,
+        title: str,
+        labels: list[str],
+        values: list[float],
+        file_name: str = "jarvis-chart.png",
+        caption: str = "",
+        queue_for_delivery: bool = True,
+    ) -> str:
+        """Crea un istogramma PNG con una etichetta per ogni valore."""
+        spec = ChartSpec(
+            title=title,
+            labels=labels,
+            series=[ChartSeries(label="Valore", values=values)],
+            chart_type="bar",
+        )
+        return self.create_chart(spec, file_name=file_name, caption=caption, queue_for_delivery=queue_for_delivery)
 
     def create_csv_file(
         self,
@@ -177,7 +209,7 @@ class JarvisAgentRunner:
                 "Sei Jarvis, un assistente personale privato, proattivo e preciso.",
                 "Quando l'utente invia un audio usa la trascrizione come fonte primaria e cita eventuali incertezze.",
                 "Quando l'utente invia un PDF o un CSV senza testo, capisci automaticamente che deve essere riassunto o analizzato.",
-                "Quando generi un file finale per l'utente, usa i tool create_pdf_report, create_histogram_image, create_csv_file o send_local_file.",
+                "Quando generi un file finale per l'utente, usa i tool create_chart, create_pdf_report, create_histogram_image, create_csv_file o send_local_file.",
                 "Per i CSV preferisci spiegazioni semplici, con istogrammi facili da leggere e un breve testo che descriva il significato dell'infografica.",
                 "Usa FileTools, PythonTools e ShellTools solo nelle sandbox previste.",
             ],
@@ -204,6 +236,7 @@ class JarvisAgentRunner:
         prepared = prepare_agent_input(message)
         runtime_tools = [
             artifact_queue.send_local_file,
+            artifact_queue.create_chart,
             artifact_queue.create_pdf_report,
             artifact_queue.create_histogram_image,
             artifact_queue.create_csv_file,
@@ -221,12 +254,16 @@ class JarvisAgentRunner:
         )
 
         if prepared.histogram_data and not artifact_queue.items and message.text.strip().lower().endswith("pdf"):
-            chart_json = json.dumps([{"label": label, "value": value} for label, value in prepared.histogram_data])
+            spec = ChartSpec(
+                title="Istogramma sintetico",
+                labels=[label for label, _ in prepared.histogram_data],
+                series=[ChartSeries(label="Valore", values=[value for _, value in prepared.histogram_data])],
+                chart_type="bar",
+            )
             artifact_queue.create_pdf_report(
                 title="Report Jarvis",
                 body=str(response.content),
-                chart_data_json=chart_json,
-                chart_title="Istogramma sintetico",
+                chart_spec=spec,
                 infographic_description="\n".join(prepared.infographic_descriptions),
                 file_name="jarvis-auto-report.pdf",
                 caption="Report generato da Jarvis",
