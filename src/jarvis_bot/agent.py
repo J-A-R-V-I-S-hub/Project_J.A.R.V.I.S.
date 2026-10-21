@@ -15,9 +15,11 @@ from agno.tools.python import PythonTools
 from agno.tools.shell import ShellTools
 from agno.tools.websearch import WebSearchTools
 
+from .app_state import AppStateStore
 from .attachments import prepare_agent_input
 from .config import Settings
 from .integrations.weather import get_weather
+from .media import generate_image, synthesize_speech
 from .quality import build_quality_artifacts, record_snapshot, trend_spec
 from .reminders import ReminderStore
 from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
@@ -39,11 +41,13 @@ class ArtifactQueue:
         reports_dir: Path,
         workspace_dir: Path | None = None,
         app_db_path: Path | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self.output_dir = output_dir
         self.reports_dir = reports_dir
         self.workspace_dir = workspace_dir
         self.app_db_path = app_db_path
+        self.settings = settings
         self.items: list[PendingArtifact] = []
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
@@ -217,6 +221,61 @@ class ArtifactQueue:
             return "Servono almeno due analisi qualità salvate per disegnare il trend."
         return self.create_chart(spec, file_name=file_name, caption=caption, queue_for_delivery=queue_for_delivery)
 
+    def create_voice_message(
+        self,
+        text: str,
+        file_name: str = "jarvis-voice.ogg",
+        caption: str = "",
+        queue_for_delivery: bool = True,
+    ) -> str:
+        """Sintetizza un messaggio vocale con il testo indicato.
+
+        Usa OpenAI TTS se OPENAI_API_KEY è configurata, altrimenti il comando
+        macOS 'say'. Il file viene inviato su Telegram come audio.
+        """
+        if self.settings is None:
+            return "Sintesi vocale non configurata."
+        safe_name = slugify_filename(file_name, "jarvis-voice.ogg")
+        if Path(safe_name).suffix.lower() not in {".ogg", ".mp3", ".m4a", ".wav"}:
+            safe_name += ".ogg"
+        try:
+            path = synthesize_speech(
+                text[: self.settings.voice_reply_max_chars],
+                self.output_dir / safe_name,
+                api_key=self.settings.openai_api_key,
+                model=self.settings.tts_model,
+                voice=self.settings.tts_voice,
+            )
+        except Exception as exc:
+            return f"Sintesi vocale non riuscita: {exc}"
+        self._queue_if_requested(path, caption or "Messaggio vocale", queue_for_delivery)
+        return str(path)
+
+    def create_image(
+        self,
+        prompt: str,
+        file_name: str = "jarvis-image.png",
+        caption: str = "",
+        queue_for_delivery: bool = True,
+    ) -> str:
+        """Genera un'immagine dal prompt e la invia su Telegram."""
+        if self.settings is None:
+            return "Generazione immagini non configurata."
+        safe_name = slugify_filename(file_name, "jarvis-image.png")
+        if not safe_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            safe_name += ".png"
+        try:
+            path = generate_image(
+                prompt,
+                self.output_dir / safe_name,
+                api_key=self.settings.openai_api_key,
+                model=self.settings.image_model,
+            )
+        except Exception as exc:
+            return f"Generazione immagine non riuscita: {exc}"
+        self._queue_if_requested(path, caption or prompt[:200], queue_for_delivery)
+        return str(path)
+
 
 class JarvisAgentRunner:
     def __init__(self, settings: Settings) -> None:
@@ -231,6 +290,7 @@ class JarvisAgentRunner:
             ),
         )
         self.reminders = ReminderStore(settings.app_db_path_obj, settings.timezone)
+        self.app_state = AppStateStore(settings.app_db_path_obj)
 
     def _reminder_tools(self, chat_id: int) -> list[object]:
         def create_reminder(text: str, due_at: str, recurrence: str = "none") -> str:
@@ -336,6 +396,9 @@ class JarvisAgentRunner:
                 "Quando l'utente invia un audio usa la trascrizione come fonte primaria e cita eventuali incertezze.",
                 "Quando l'utente invia un PDF o un CSV senza testo, capisci automaticamente che deve essere riassunto o analizzato.",
                 "Quando generi un file finale per l'utente, usa i tool create_chart, create_pdf_report, create_histogram_image, create_csv_file o send_local_file.",
+                "Per analisi di difetti o tabelle qualità (prodotto × categorie) usa create_quality_report; per il trend usa create_quality_trend.",
+                "Se l'utente chiede di generare un'immagine usa create_image. Se chiede una risposta vocale usa create_voice_message.",
+                "Gestisci promemoria con create_reminder, list_reminders e cancel_reminder; usa il meteo con current_weather.",
                 "Per i CSV preferisci spiegazioni semplici, con istogrammi facili da leggere e un breve testo che descriva il significato dell'infografica.",
                 "Usa FileTools, PythonTools e ShellTools solo nelle sandbox previste.",
             ],
@@ -368,6 +431,8 @@ class JarvisAgentRunner:
             artifact_queue.create_csv_file,
             artifact_queue.create_quality_report,
             artifact_queue.create_quality_trend,
+            artifact_queue.create_voice_message,
+            artifact_queue.create_image,
         ]
         agent = self._build_agent(
             chat_id=message.chat_id,

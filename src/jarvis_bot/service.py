@@ -48,7 +48,8 @@ HELP_TEXT = (
     "/help — questo messaggio\n"
     "/reset — dimentica la conversazione corrente\n"
     "/stats — statistiche d'uso\n"
-    "/files — ultimi file generati\n\n"
+    "/files — ultimi file generati\n"
+    "/voice on|off — risposte vocali\n\n"
     "**Cosa so fare**\n"
     "• rispondere e ricordare il contesto della chat\n"
     "• trascrivere audio e descrivere immagini\n"
@@ -75,6 +76,7 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_reset, Command("reset"))
         self.dispatcher.message.register(self.handle_stats, Command("stats"))
         self.dispatcher.message.register(self.handle_files, Command("files"))
+        self.dispatcher.message.register(self.handle_voice_mode, Command("voice"))
         self.dispatcher.message.register(self.handle_voice, F.voice)
         self.dispatcher.message.register(self.handle_audio, F.audio)
         self.dispatcher.message.register(self.handle_photo, F.photo)
@@ -141,6 +143,23 @@ class JarvisTelegramService:
             moment = datetime.fromtimestamp(path.stat().st_mtime).strftime("%d/%m %H:%M")
             lines.append(f"• `{path.name}` — {size_kb} KB — {moment}")
         await message.answer("\n".join(lines))
+
+    async def handle_voice_mode(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        state = getattr(self.agent_runner, "app_state", None)
+        if state is None:
+            await message.answer("Preferenze vocali non disponibili con questo runner.")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) == 1:
+            enabled = state.get_bool(message.chat.id, "voice_replies", False)
+            status = "attive" if enabled else "disattive"
+            await message.answer(f"Risposte vocali: **{status}**.\nUsa /voice on oppure /voice off.")
+            return
+        enabled = parts[1].strip().lower() in {"on", "si", "sì", "true", "1", "attiva", "attive"}
+        state.set(message.chat.id, "voice_replies", "true" if enabled else "false")
+        await message.answer("Risposte vocali attivate. 🔊" if enabled else "Risposte vocali disattivate. 🔇")
 
     def _recent_files(self, limit: int = 10) -> list[Path]:
         candidates: list[Path] = []
@@ -371,9 +390,18 @@ class JarvisTelegramService:
                         self.settings.reports_path,
                         self.settings.workspace_path,
                         self.settings.app_db_path_obj,
+                        self.settings,
                     )
                     async with self._run_semaphore:
                         reply_text = await asyncio.to_thread(self.agent_runner.run, incoming, artifact_queue)
+                    state = getattr(self.agent_runner, "app_state", None)
+                    if state is not None and state.get_bool(message.chat.id, "voice_replies", False):
+                        await asyncio.to_thread(
+                            artifact_queue.create_voice_message,
+                            reply_text,
+                            "jarvis-reply.ogg",
+                            "Risposta vocale",
+                        )
                     await self._reply_chunks(message, reply_text)
                     await self._deliver_artifacts(message.chat.id, artifact_queue.items)
                 except Exception:

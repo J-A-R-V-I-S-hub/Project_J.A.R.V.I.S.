@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     quality_watch_dir: str = Field(default="data/weldtrace", alias="JARVIS_QUALITY_WATCH_DIR")
     quality_watch_enabled: bool = Field(default=True, alias="JARVIS_QUALITY_WATCH_ENABLED")
 
+    # Media (optional, require OPENAI_API_KEY)
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    tts_model: str = Field(default="gpt-4o-mini-tts", alias="JARVIS_TTS_MODEL")
+    tts_voice: str = Field(default="alloy", alias="JARVIS_TTS_VOICE")
+    image_model: str = Field(default="gpt-image-1", alias="JARVIS_IMAGE_MODEL")
+    voice_reply_max_chars: int = Field(default=1500, alias="JARVIS_VOICE_MAX_CHARS")
+
     @property
     def db_path(self) -> Path:
         return Path(self.agno_db_path)
