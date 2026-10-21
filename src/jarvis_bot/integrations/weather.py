@@ -81,8 +81,10 @@ def get_weather(
 
     lines = [
         f"🌤️ **Meteo — {resolved_name}**",
-        f"Adesso: {current.get('temperature_2m')}°C (percepiti {current.get('apparent_temperature')}°C), "
-        f"{_describe(current.get('weather_code'))}, vento {current.get('wind_speed_10m')} km/h.",
+        (
+            f"Adesso: {current.get('temperature_2m')}°C (percepiti {current.get('apparent_temperature')}°C), "
+            f"{_describe(current.get('weather_code'))}, vento {current.get('wind_speed_10m')} km/h."
+        ),
     ]
     if max_temp is not None and min_temp is not None:
         lines.append(f"Oggi: min {min_temp}°C / max {max_temp}°C.")

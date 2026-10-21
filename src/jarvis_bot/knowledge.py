@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 SUPPORTED_SUFFIXES = {
@@ -19,6 +20,8 @@ SUPPORTED_SUFFIXES = {
     ".py",
     ".log",
 }
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -133,7 +136,7 @@ class KnowledgeBase:
 
         resolved = str(file_path)
         source_name = source or file_path.name
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         connection = self._connect()
         try:
@@ -185,7 +188,7 @@ class KnowledgeBase:
                 total_chunks += self.index_file(path)
                 files += 1
             except Exception:
-                continue
+                LOGGER.warning("Could not index %s", path, exc_info=True)
         return files, total_chunks
 
     @staticmethod

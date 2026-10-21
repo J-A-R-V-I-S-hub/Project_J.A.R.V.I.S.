@@ -4,7 +4,8 @@ import asyncio
 import logging
 import mimetypes
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, time as dt_time
+from datetime import datetime
+from datetime import time as dt_time
 from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -473,49 +474,48 @@ class JarvisTelegramService:
         )
 
         lock = self._chat_locks.setdefault(message.chat.id, asyncio.Lock())
-        async with lock:
-            async with self._typing(message.chat.id):
-                try:
-                    for attachment in incoming.attachments:
-                        if attachment.kind is not AttachmentType.AUDIO:
-                            continue
-                        try:
-                            transcript = await asyncio.to_thread(
-                                self.agent_runner.transcribe_audio, attachment.local_path
-                            )
-                        except Exception:
-                            LOGGER.exception("Audio transcription failed for %s", attachment.local_path)
-                            await message.answer("⚠️ Non sono riuscito a trascrivere l'audio, procedo senza.")
-                            continue
-                        incoming.audio_transcript = transcript
-                        await self._reply_chunks(message, f"Trascrizione audio:\n\n{transcript}")
-                        break
-
-                    artifact_queue = ArtifactQueue(
-                        self.settings.output_path,
-                        self.settings.reports_path,
-                        self.settings.workspace_path,
-                        self.settings.app_db_path_obj,
-                        self.settings,
-                    )
-                    async with self._run_semaphore:
-                        reply_text = await asyncio.to_thread(self.agent_runner.run, incoming, artifact_queue)
-                    state = getattr(self.agent_runner, "app_state", None)
-                    if state is not None and state.get_bool(message.chat.id, "voice_replies", False):
-                        await asyncio.to_thread(
-                            artifact_queue.create_voice_message,
-                            reply_text,
-                            "jarvis-reply.ogg",
-                            "Risposta vocale",
+        async with lock, self._typing(message.chat.id):
+            try:
+                for attachment in incoming.attachments:
+                    if attachment.kind is not AttachmentType.AUDIO:
+                        continue
+                    try:
+                        transcript = await asyncio.to_thread(
+                            self.agent_runner.transcribe_audio, attachment.local_path
                         )
-                    await self._reply_chunks(message, reply_text)
-                    await self._deliver_artifacts(message.chat.id, artifact_queue.items)
-                except Exception:
-                    LOGGER.exception("Failed to process message %s", message.message_id)
-                    await message.answer(
-                        "⚠️ Qualcosa è andato storto mentre elaboravo il messaggio. "
-                        "Riprova tra poco."
+                    except Exception:
+                        LOGGER.exception("Audio transcription failed for %s", attachment.local_path)
+                        await message.answer("⚠️ Non sono riuscito a trascrivere l'audio, procedo senza.")
+                        continue
+                    incoming.audio_transcript = transcript
+                    await self._reply_chunks(message, f"Trascrizione audio:\n\n{transcript}")
+                    break
+
+                artifact_queue = ArtifactQueue(
+                    self.settings.output_path,
+                    self.settings.reports_path,
+                    self.settings.workspace_path,
+                    self.settings.app_db_path_obj,
+                    self.settings,
+                )
+                async with self._run_semaphore:
+                    reply_text = await asyncio.to_thread(self.agent_runner.run, incoming, artifact_queue)
+                state = getattr(self.agent_runner, "app_state", None)
+                if state is not None and state.get_bool(message.chat.id, "voice_replies", False):
+                    await asyncio.to_thread(
+                        artifact_queue.create_voice_message,
+                        reply_text,
+                        "jarvis-reply.ogg",
+                        "Risposta vocale",
                     )
+                await self._reply_chunks(message, reply_text)
+                await self._deliver_artifacts(message.chat.id, artifact_queue.items)
+            except Exception:
+                LOGGER.exception("Failed to process message %s", message.message_id)
+                await message.answer(
+                    "⚠️ Qualcosa è andato storto mentre elaboravo il messaggio. "
+                    "Riprova tra poco."
+                )
 
     @asynccontextmanager
     async def _typing(self, chat_id: int):

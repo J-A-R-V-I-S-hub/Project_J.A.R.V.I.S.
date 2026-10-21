@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -34,7 +34,7 @@ def test_reminder_roundtrip(tmp_path: Path) -> None:
     assert reminder.id > 0
     assert [item.text for item in store.list(1)] == ["Bere acqua"]
 
-    future = datetime.now(timezone.utc) + timedelta(minutes=5)
+    future = datetime.now(UTC) + timedelta(minutes=5)
     due = store.due(future)
     assert len(due) == 1
 
@@ -46,7 +46,7 @@ def test_recurring_reminder_reschedules(tmp_path: Path) -> None:
     store = ReminderStore(tmp_path / "app.db")
     store.add(1, "Daily standup", "+1m", "daily")
 
-    future = datetime.now(timezone.utc) + timedelta(minutes=5)
+    future = datetime.now(UTC) + timedelta(minutes=5)
     due = store.due(future)
     assert len(due) == 1
 

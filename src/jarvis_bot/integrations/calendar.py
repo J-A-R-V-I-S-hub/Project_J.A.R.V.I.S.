@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -24,7 +24,7 @@ def _unfold(text: str) -> str:
 def _parse_datetime(value: str, tzid: str | None, default_tz: ZoneInfo) -> datetime:
     raw = value.strip()
     if raw.endswith("Z"):
-        parsed = datetime.strptime(raw, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        parsed = datetime.strptime(raw, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
     elif "T" in raw:
         parsed = datetime.strptime(raw, "%Y%m%dT%H%M%S")
         zone = ZoneInfo(tzid) if tzid else default_tz
@@ -37,7 +37,7 @@ def _parse_datetime(value: str, tzid: str | None, default_tz: ZoneInfo) -> datet
 def parse_ics(text: str, timezone_name: str = "Europe/Rome") -> list[CalendarEvent]:
     default_tz = ZoneInfo(timezone_name)
     events: list[CalendarEvent] = []
-    for block in re.findall(r"BEGIN:VEVENT(.*?)END:VEVENT", _unfold(text), re.S):
+    for block in re.findall(r"BEGIN:VEVENT(.*?)END:VEVENT", _unfold(text), re.DOTALL):
         properties: dict[str, tuple[str, str | None]] = {}
         for line in block.splitlines():
             if ":" not in line:

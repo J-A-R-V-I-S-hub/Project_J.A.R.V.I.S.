@@ -3,8 +3,8 @@ from __future__ import annotations
 import csv
 import json
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 from xml.sax.saxutils import escape
 
 import matplotlib
@@ -80,7 +80,7 @@ def render_chart(output_path: str | Path, spec: ChartSpec) -> Path:
             startangle=90,
         )
     elif spec.chart_type == "pareto":
-        pairs = sorted(zip(spec.labels, spec.series[0].values), key=lambda item: item[1], reverse=True)
+        pairs = sorted(zip(spec.labels, spec.series[0].values, strict=True), key=lambda item: item[1], reverse=True)
         labels = [label for label, _ in pairs]
         values = [value for _, value in pairs]
         total = sum(values) or 1.0
@@ -156,7 +156,7 @@ def write_csv_file(output_path: str | Path, rows_json: str) -> Path:
     if not isinstance(rows, list) or not rows:
         raise ValueError("rows_json must describe a non-empty list")
 
-    fieldnames = sorted({key for row in rows if isinstance(row, dict) for key in row.keys()})
+    fieldnames = sorted({key for row in rows if isinstance(row, dict) for key in row})
     if not fieldnames:
         raise ValueError("rows_json must contain dictionaries with keys")
 

@@ -209,7 +209,7 @@ class ArtifactQueue:
             try:
                 record_snapshot(self.app_db_path, report)
             except Exception:
-                pass
+                LOGGER.warning("Could not record the quality snapshot", exc_info=True)
 
         for artifact in artifacts:
             self._queue_if_requested(artifact, caption or report.source, queue_for_delivery)

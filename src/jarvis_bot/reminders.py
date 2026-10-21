@@ -4,7 +4,7 @@ import re
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -155,8 +155,8 @@ class ReminderStore:
         cleaned = text.strip()
         if not cleaned:
             raise ValueError("Il testo del promemoria è vuoto.")
-        when = parse_when(due_at, tz=self.tz).astimezone(timezone.utc)
-        now_iso = datetime.now(timezone.utc).isoformat()
+        when = parse_when(due_at, tz=self.tz).astimezone(UTC)
+        now_iso = datetime.now(UTC).isoformat()
         with self._connect() as connection:
             cursor = connection.execute(
                 "INSERT INTO reminders (chat_id, text, due_at, recurrence, status, created_at) "
@@ -186,7 +186,7 @@ class ReminderStore:
             return cursor.rowcount > 0
 
     def due(self, now: datetime | None = None) -> list[Reminder]:
-        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+        current = (now or datetime.now(UTC)).astimezone(UTC).isoformat()
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM reminders WHERE status = 'pending' AND due_at <= ? ORDER BY due_at ASC",
@@ -195,7 +195,7 @@ class ReminderStore:
         return [self._row_to_reminder(row) for row in rows]
 
     def mark_sent(self, reminder: Reminder, now: datetime | None = None) -> None:
-        current = now or datetime.now(timezone.utc)
+        current = now or datetime.now(UTC)
         if reminder.recurrence in {"daily", "weekly"}:
             step = timedelta(days=1 if reminder.recurrence == "daily" else 7)
             next_due = datetime.fromisoformat(reminder.due_at)
@@ -204,7 +204,7 @@ class ReminderStore:
             with self._connect() as connection:
                 connection.execute(
                     "UPDATE reminders SET due_at = ? WHERE id = ?",
-                    (next_due.astimezone(timezone.utc).isoformat(), reminder.id),
+                    (next_due.astimezone(UTC).isoformat(), reminder.id),
                 )
             return
 

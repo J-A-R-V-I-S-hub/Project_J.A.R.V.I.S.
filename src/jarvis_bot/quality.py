@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -79,7 +79,7 @@ def analyse_defects(
     matrix = [[float(value) for value in row] for row in grouped[categories].to_numpy().tolist()]
 
     product_totals = sorted(
-        ((product, float(sum(row))) for product, row in zip(products, matrix)),
+        ((product, float(sum(row))) for product, row in zip(products, matrix, strict=True)),
         key=lambda item: item[1],
         reverse=True,
     )
@@ -250,7 +250,7 @@ def record_snapshot(db_path: str | Path, report: QualityReport) -> int:
                 report.grand_total,
                 len(report.products),
                 len(report.categories),
-                datetime.now(timezone.utc).isoformat(),
+                datetime.now(UTC).isoformat(),
             ),
         )
         snapshot_id = int(cursor.lastrowid)
@@ -311,7 +311,7 @@ def mark_quality_file(db_path: str | Path, path: str | Path) -> None:
     try:
         connection.execute(
             "INSERT OR REPLACE INTO quality_files (path, processed_at) VALUES (?, ?)",
-            (str(Path(path).resolve()), datetime.now(timezone.utc).isoformat()),
+            (str(Path(path).resolve()), datetime.now(UTC).isoformat()),
         )
         connection.commit()
     finally:
