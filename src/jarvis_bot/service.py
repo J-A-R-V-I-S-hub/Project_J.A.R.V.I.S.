@@ -21,6 +21,7 @@ from .approvals import execute_approval
 from .backup import create_backup
 from .codebase import index_repository, repo_status, search_code
 from .config import Settings
+from .doctor import format_checks, run_checks
 from .integrations.weather import get_weather
 from .knowledge import format_hits, format_sources
 from .meetings import summarize_meeting
@@ -77,7 +78,8 @@ HELP_TEXT = (
     "/audit — ultime azioni registrate\n"
     "/approvals — azioni in attesa\n"
     "/confirm <id> · /cancel <id> — approva o annulla\n"
-    "/backup — backup dei database\n\n"
+    "/backup — backup dei database\n"
+    "/doctor — autodiagnosi configurazione\n\n"
     "**Cosa so fare**\n"
     "• rispondere e ricordare il contesto della chat\n"
     "• trascrivere audio e descrivere immagini\n"
@@ -127,6 +129,7 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_confirm, Command("confirm"))
         self.dispatcher.message.register(self.handle_cancel, Command("cancel"))
         self.dispatcher.message.register(self.handle_backup, Command("backup"))
+        self.dispatcher.message.register(self.handle_doctor, Command("doctor"))
         self.dispatcher.message.register(self.handle_voice, F.voice)
         self.dispatcher.message.register(self.handle_audio, F.audio)
         self.dispatcher.message.register(self.handle_photo, F.photo)
@@ -628,6 +631,12 @@ class JarvisTelegramService:
             self.settings.backup_keep,
         )
         await message.answer(result)
+
+    async def handle_doctor(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        checks = await asyncio.to_thread(run_checks, self.settings)
+        await self._reply_chunks(message, format_checks(checks), parse_mode="Markdown")
 
     def _recent_files(self, limit: int = 10) -> list[Path]:
         candidates: list[Path] = []

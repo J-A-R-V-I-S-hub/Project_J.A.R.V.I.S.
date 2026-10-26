@@ -4,7 +4,7 @@
 
 **Status:** Online
 
-### Assistente personale sperimentale su Telegram.
+### Assistente personale sperimentale ispirato a J.A.R.V.I.S. di Iron Man.
 
 - Apprende.
 - Analizza.
@@ -17,17 +17,51 @@ _"A volte bisogna correre prima ancora di imparare a camminare." — Tony Stark_
 
 ## Cosa sa fare
 
-- Conversazione con memoria persistente per chat (sessioni Agno + memoria a lungo termine).
-- Trascrizione di vocali e audio.
-- Descrizione e analisi di immagini.
-- Estrazione testo da PDF, DOCX, CSV ed Excel.
-- Grafici (barre, barre raggruppate, linee, torta, Pareto), report PDF e CSV.
-- Analisi qualità/difetti con Pareto, top offender, trend storico e watcher su `data/weldtrace/`.
-- Promemoria, brief mattutino con meteo e comandi rapidi.
-- Knowledge base locale con ricerca full-text (SQLite FTS5) e citazioni delle fonti.
-- Risposte vocali (TTS) e generazione immagini.
-- Integrazioni opzionali: GitHub, email, calendario ICS, Notion, meteo.
-- Plugin estensibili via entry point `jarvis.plugins`.
+**Conversazione e memoria**
+- Memoria persistente per chat (sessioni Agno + memoria a lungo termine)
+- Profilo strutturato: fatti, obiettivi, progetti
+- Personalità selezionabile (`butler`, `friendly`, `concise`, `mentor`, `stark`)
+
+**Input multimodale**
+- Testo, vocali e audio con trascrizione
+- Immagini, PDF, DOCX, CSV ed Excel
+- Screenshot dello schermo e webcam con analisi vision
+
+**Analisi e report**
+- Grafici: barre, barre raggruppate, linee, torta, Pareto
+- Report PDF, CSV, simulazioni what-if
+- Analisi qualità/difetti con Pareto, top offender e trend storico
+- Watcher automatico su `data/quality/`
+
+**Voce e presenza**
+- TTS OpenAI oppure macOS `say`
+- Voice loop locale con wake word ("Hey Jarvis") o push-to-talk
+- Meeting assistant: registra, trascrive, riassume, action item
+
+**Casa e Mac**
+- Controllo macOS: app, volume, musica, screenshot, clipboard, notifiche, Shortcuts, lock
+- Home Assistant: luci, clima, scene, sensori
+- Presenza via ping del telefono
+- Protocolli con nome (stile "House Party Protocol")
+
+**Proattività**
+- Brief mattutino con meteo e promemoria
+- Avvisi su email, GitHub, calendario, meteo e presenza
+- Sentinella webcam con rilevamento movimento
+
+**Conoscenza e codice**
+- Knowledge base locale SQLite FTS5 con citazioni
+- Indicizzazione automatica degli allegati
+- Copilot del repository: stato git, ricerca codice, indice del progetto
+
+**Sicurezza e operatività**
+- Allowlist single-user
+- Audit log delle azioni
+- Approvazioni per azioni sensibili (`/confirm`, `/cancel`)
+- Shell con allowlist
+- Backup automatici dei database
+- Routing modelli (economico/potente) e fallback Ollama
+- HUD locale con metriche e stato
 
 ## Setup
 
@@ -38,78 +72,136 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-2. Installa le dipendenze:
+2. Installa il core:
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'
 ```
 
-3. Crea il file `.env` partendo dai placeholder:
+3. Extra opzionali:
+
+```bash
+# Voce locale + meeting (sounddevice, faster-whisper, openwakeword)
+python -m pip install -e '.[voice]'
+
+# Browser automation
+python -m pip install -e '.[browser]'
+
+# Fallback locale con Ollama
+python -m pip install -e '.[ollama]'
+```
+
+4. Configura `.env`:
 
 ```bash
 cp .env.example .env
 ```
 
-4. Inserisci solo valori reali nel tuo `.env` locale, mai nel repository.
+Inserisci solo valori reali nel tuo `.env` locale, mai nel repository.
+
+5. Controlla che tutto sia a posto:
+
+```bash
+jarvis-doctor
+```
 
 ## Avvio
 
 ```bash
 source .venv/bin/activate
 python -m jarvis_bot.main
+# oppure
+jarvis
 ```
 
-In alternativa, dopo l'installazione editable:
+HUD locale:
 
 ```bash
-jarvis
+jarvis-dashboard
+# http://127.0.0.1:8765
+```
+
+Voice loop:
+
+```bash
+jarvis-voice              # wake word "Hey Jarvis"
+jarvis-voice --push-to-talk
 ```
 
 ## Comandi Telegram
 
-- `/start` — presentazione e capacità.
-- `/help` — elenco comandi.
-- `/reset` — dimentica la conversazione corrente.
-- `/stats` — sessioni, token, latenza e tool più usati.
-- `/files` — ultimi file generati.
-- `/voice on|off` — risposte vocali automatiche.
-- `/index [file]` — indicizza la cartella `data/knowledge/` o un file specifico.
-- `/ask <domanda>` — cerca nella knowledge base.
-- `/sources` — documenti indicizzati.
-- `/brief` — brief di oggi su richiesta.
-- `/reminders` — promemoria attivi.
-- `/quality <file>` — analisi difetti di un CSV/Excel.
+| Comando | Descrizione |
+|---|---|
+| `/start`, `/help` | Presentazione e capacità |
+| `/reset` | Azzera la conversazione |
+| `/stats` | Sessioni, token, latenza, tool |
+| `/files` | Ultimi file generati |
+| `/voice on\|off` | Risposte vocali automatiche |
+| `/persona [nome]` | Cambia personalità |
+| `/protocol [nome]` | Elenca o esegue protocolli |
+| `/index [file]` | Indicizza documenti |
+| `/ask <domanda>` | Cerca nella knowledge base |
+| `/sources` | Documenti indicizzati |
+| `/brief` | Brief di oggi |
+| `/reminders` | Promemoria attivi |
+| `/quality <file>` | Analisi difetti CSV/Excel |
+| `/meeting start\|stop\|list\|show` | Meeting assistant |
+| `/look screen\|camera [domanda]` | Analisi schermo/webcam |
+| `/sentinel on\|off\|status` | Sentinella webcam |
+| `/profile [categoria]` | Profilo strutturato |
+| `/repo status\|index\|search` | Copilot del codice |
+| `/proactive on\|off\|status` | Controlli proattivi |
+| `/audit` | Ultime azioni registrate |
+| `/approvals` | Azioni in attesa |
+| `/confirm <id>`, `/cancel <id>` | Gestione approvazioni |
+| `/backup` | Backup manuale |
+| `/doctor` | Autodiagnosi configurazione |
+
+## Protocolli
+
+Protocolli predefiniti: `lavoro`, `focus`, `buonanotte`, `emergenza`.
+
+```text
+/protocol lavoro
+```
+
+Passi supportati: `open_app`, `open_url`, `notify`, `volume`, `lock`, `screenshot`,
+`shortcut`, `sleep`, `music`, `home_assistant`, `backup`.
 
 ## Configurazione
 
-Tutto passa da `.env`. Le variabili principali:
+Tutto passa da `.env`. Gruppi principali:
 
 | Gruppo | Variabili |
 |---|---|
 | Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID` |
 | LLM | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_VISION_MODEL`, `OPENROUTER_AUDIO_MODEL` |
-| Comportamento | `JARVIS_TIMEZONE`, `JARVIS_HISTORY_RUNS`, `JARVIS_TOOL_CALL_LIMIT` |
-| Brief | `JARVIS_DAILY_BRIEF_ENABLED`, `JARVIS_DAILY_BRIEF_TIME`, `JARVIS_LOCATION` |
-| Qualità | `JARVIS_QUALITY_WATCH_DIR` |
-| Knowledge | `JARVIS_KNOWLEDGE_DB_PATH`, `JARVIS_KNOWLEDGE_DIR` |
-| Media | `OPENAI_API_KEY`, `JARVIS_TTS_MODEL`, `JARVIS_IMAGE_MODEL` |
+| Agente | `JARVIS_TIMEZONE`, `JARVIS_HISTORY_RUNS`, `JARVIS_TOOL_CALL_LIMIT`, `JARVIS_PERSONA` |
+| Brief e meteo | `JARVIS_DAILY_BRIEF_*`, `JARVIS_LOCATION`, `JARVIS_LATITUDE`, `JARVIS_LONGITUDE` |
+| Qualità | `JARVIS_QUALITY_WATCH_DIR`, `JARVIS_QUALITY_WATCH_ENABLED` |
+| Media | `OPENAI_API_KEY`, `JARVIS_TTS_*`, `JARVIS_IMAGE_MODEL` |
+| Knowledge | `JARVIS_KNOWLEDGE_*` |
+| Voce | `JARVIS_VOICE_*`, `JARVIS_MEETING_DIR` |
+| HUD | `JARVIS_DASHBOARD_HOST`, `JARVIS_DASHBOARD_PORT` |
+| Casa/presenza | `HOME_ASSISTANT_URL`, `HOME_ASSISTANT_TOKEN`, `JARVIS_PHONE_IP` |
+| Visione | `JARVIS_VISION_ENABLED`, `JARVIS_SENTINEL_*` |
+| Proattività | `JARVIS_PROACTIVE_*` |
 | Integrazioni | `GITHUB_TOKEN`, `NOTION_TOKEN`, `CALENDAR_ICS_URL`, `EMAIL_*` |
+| Fondamenta | `JARVIS_REQUIRE_APPROVAL`, `JARVIS_SAFE_SHELL_ENABLED`, `JARVIS_BACKUP_*`, `JARVIS_MODEL_ROUTING_*` |
 
 Le integrazioni si attivano **solo** se le relative credenziali sono presenti.
-Senza `OPENAI_API_KEY` il TTS usa il comando macOS `say`; la generazione immagini resta disabilitata.
+Senza `OPENAI_API_KEY` il TTS usa macOS `say`; la generazione immagini resta disabilitata.
 
 ## Qualità / difetti
 
-Metti un CSV o Excel in `data/weldtrace/`: Jarvis lo analizza automaticamente, genera
-grafico a barre raggruppate, Pareto per prodotto, Pareto per categoria, trend storico
-(dopo almeno due analisi) e un report PDF, poi li invia su Telegram.
+Metti un CSV o Excel in `data/quality/`: Jarvis lo analizza automaticamente e invia
+barre raggruppate, Pareto per prodotto, Pareto per categoria, trend storico e PDF.
+In alternativa: `/quality /percorso/file.csv`.
 
-In alternativa: `/quality /percorso/del/file.csv`.
+Ogni file viene elaborato una volta sola; per rielaborarlo usa `/quality` o rinominalo.
 
 ## Plugin
-
-Un pacchetto esterno può contribuire tool e istruzioni:
 
 ```toml
 [project.entry-points."jarvis.plugins"]
@@ -131,36 +223,55 @@ def build(context: PluginContext) -> Plugin:
 
 ```text
 src/jarvis_bot/
-  main.py           entrypoint e logging
+  main.py           entrypoint bot e logging
   config.py         impostazioni da .env
-  service.py        bot Telegram, comandi, scheduler e consegna artefatti
-  agent.py          agente Agno, tool, memoria e coda artefatti
-  attachments.py    preparazione di PDF, CSV, Excel e immagini
+  service.py        bot Telegram, comandi, scheduler, approvazioni
+  agent.py          agente Agno, tool, memoria, routing modelli
+  attachments.py    preparazione PDF/CSV/Excel/immagini
   schemas.py        modelli di dominio e ChartSpec
-  reporting.py      grafici, CSV e report PDF
-  reminders.py      promemoria SQLite + parsing date
-  quality.py        analisi difetti, Pareto e trend
-  knowledge.py      knowledge base SQLite FTS5
-  media.py          TTS e generazione immagini
-  stats.py          statistiche d'uso dal DB Agno
-  app_state.py      preferenze per chat
+  reporting.py      grafici, CSV e PDF
+  reminders.py      promemoria
+  quality.py        analisi difetti e trend
+  simulation.py     scenari what-if
+  knowledge.py      knowledge base FTS5
+  profile.py        profilo strutturato
+  proactive.py      regole proattive
+  protocols.py      protocolli/macro
+  meetings.py       meeting assistant
+  voice_loop.py     voce locale e wake word
+  vision.py         schermo, camera, sentinella
+  dashboard.py      HUD locale
+  codebase.py       copilot del repository
+  models.py         routing modelli
+  security.py       shell sicura
+  approvals.py      approvazioni
+  audit.py          audit log
+  backup.py         backup database
+  doctor.py         autodiagnosi
+  persona.py        personalità
+  app_state.py      preferenze chat
   plugins.py        registry plugin
-  integrations/     GitHub, email, calendario ICS, Notion, meteo
+  media.py          TTS e immagini
+  integrations/     GitHub, email, calendario, Notion, meteo, Home Assistant, macOS, musica
 data/               runtime locale (ignorato da git)
 tests/              test unitari
 ```
 
-## Test
+## Test e qualità
 
 ```bash
 source .venv/bin/activate
 pytest
+ruff check src tests
 ```
+
+La CI esegue lint e test su Python 3.11, 3.12 e 3.13.
 
 ## Sicurezza
 
 Il bot risponde **solo** all'utente indicato in `TELEGRAM_ALLOWED_USER_ID`.
 Il progetto è pensato per uso personale: non è multi-utente e non va esposto
-pubblicamente. Il motore Python/shell è una sandbox "soft": non eseguirlo su
-dati o macchine non fidati. I file inviabili sono limitati a `output/`, `reports/`
-e `workspace/`, con blocco di database e file sensibili.
+pubblicamente. La shell è limitata da una allowlist; le azioni sensibili possono
+richiedere approvazione (`JARVIS_REQUIRE_APPROVAL=true`). I file inviabili sono
+limitati a `output/`, `reports/` e `workspace/`, con blocco di database e file sensibili.
+L'HUD ascolta solo su `127.0.0.1` per default.

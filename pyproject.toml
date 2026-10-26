@@ -45,6 +45,7 @@ ollama = ["ollama>=0.4.0"]
 jarvis = "jarvis_bot.main:main"
 jarvis-voice = "jarvis_bot.voice_loop:main"
 jarvis-dashboard = "jarvis_bot.dashboard:main"
+jarvis-doctor = "jarvis_bot.doctor:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
