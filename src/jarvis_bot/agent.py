@@ -28,6 +28,7 @@ from .integrations.notion import NotionClient
 from .integrations.weather import get_weather
 from .knowledge import KnowledgeBase, format_hits, format_sources
 from .media import generate_image, synthesize_speech
+from .meetings import MeetingRecorder, MeetingStore
 from .persona import persona_instructions
 from .plugins import PluginContext, PluginRegistry
 from .protocols import ProtocolRunner, ProtocolStore
@@ -306,6 +307,8 @@ class JarvisAgentRunner:
         self.app_state = AppStateStore(settings.app_db_path_obj)
         self.protocols = ProtocolStore(settings.app_db_path_obj)
         self.protocol_runner = ProtocolRunner(settings.music_app)
+        self.meetings = MeetingStore(settings.app_db_path_obj)
+        self.meeting_recorder = MeetingRecorder(settings)
         self.knowledge = (
             KnowledgeBase(settings.knowledge_db_path_obj, settings.knowledge_chunk_chars)
             if settings.knowledge_enabled

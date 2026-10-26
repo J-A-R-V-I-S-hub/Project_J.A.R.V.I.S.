@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     macos_control_enabled: bool = Field(default=True, alias="JARVIS_MACOS_CONTROL_ENABLED")
     music_app: str = Field(default="Music", alias="JARVIS_MUSIC_APP")
     protocols_enabled: bool = Field(default=True, alias="JARVIS_PROTOCOLS_ENABLED")
+    voice_wake_word: str = Field(default="hey jarvis", alias="JARVIS_VOICE_WAKE_WORD")
+    voice_stt_backend: str = Field(default="auto", alias="JARVIS_VOICE_STT_BACKEND")
+    voice_stt_model: str = Field(default="base", alias="JARVIS_VOICE_STT_MODEL")
+    voice_silence_seconds: float = Field(default=1.2, alias="JARVIS_VOICE_SILENCE_SECONDS")
+    voice_max_seconds: float = Field(default=15.0, alias="JARVIS_VOICE_MAX_SECONDS")
+    voice_device: int | None = Field(default=None, alias="JARVIS_VOICE_DEVICE")
+    meeting_dir: str = Field(default="data/meetings", alias="JARVIS_MEETING_DIR")
 
     # App state (reminders, artifacts, quality history)
     app_db_path: str = Field(default="data/jarvis_app.db", alias="JARVIS_APP_DB_PATH")
@@ -132,6 +139,10 @@ class Settings(BaseSettings):
     def knowledge_path(self) -> Path:
         return Path(self.knowledge_dir)
 
+    @property
+    def meeting_path(self) -> Path:
+        return Path(self.meeting_dir)
+
     def ensure_directories(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.app_db_path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -145,6 +156,7 @@ class Settings(BaseSettings):
             self.quality_watch_path,
             self.knowledge_path,
             self.knowledge_db_path_obj.parent,
+            self.meeting_path,
         ):
             path.mkdir(parents=True, exist_ok=True)
 

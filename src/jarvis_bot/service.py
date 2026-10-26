@@ -19,6 +19,7 @@ from .agent import ArtifactQueue, JarvisAgentRunner
 from .config import Settings
 from .integrations.weather import get_weather
 from .knowledge import format_hits, format_sources
+from .meetings import summarize_meeting
 from .persona import PERSONAS, normalize_persona, persona_choices, persona_label
 from .quality import (
     build_quality_artifacts,
@@ -30,6 +31,7 @@ from .quality import (
 from .reporting import render_chart
 from .schemas import Attachment, AttachmentType, IncomingMessage, PendingArtifact
 from .stats import collect_stats, format_stats
+from .voice_loop import transcribe_audio as transcribe_audio_file
 
 LOGGER = logging.getLogger(__name__)
 TELEGRAM_MESSAGE_LIMIT = 4096
@@ -61,7 +63,8 @@ HELP_TEXT = (
     "/reminders — promemoria attivi\n"
     "/quality <file> — analisi difetti CSV/Excel\n"
     "/persona [nome] — cambia personalità\n"
-    "/protocol [nome] — elenca o esegue protocolli\n\n"
+    "/protocol [nome] — elenca o esegue protocolli\n"
+    "/meeting start|stop|list|show — registra e riassume riunioni\n\n"
     "**Cosa so fare**\n"
     "• rispondere e ricordare il contesto della chat\n"
     "• trascrivere audio e descrivere immagini\n"
@@ -97,6 +100,7 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_quality, Command("quality"))
         self.dispatcher.message.register(self.handle_persona, Command("persona"))
         self.dispatcher.message.register(self.handle_protocol, Command("protocol"))
+        self.dispatcher.message.register(self.handle_meeting, Command("meeting"))
         self.dispatcher.message.register(self.handle_voice, F.voice)
         self.dispatcher.message.register(self.handle_audio, F.audio)
         self.dispatcher.message.register(self.handle_photo, F.photo)
@@ -319,6 +323,85 @@ class JarvisTelegramService:
             f"🧩 **{protocol.name}**\n" + "\n".join(results),
             parse_mode="Markdown",
         )
+
+    async def handle_meeting(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        recorder = getattr(self.agent_runner, "meeting_recorder", None)
+        store = getattr(self.agent_runner, "meetings", None)
+        if recorder is None or store is None:
+            await message.answer("Meeting assistant non disponibile con questo runner.")
+            return
+
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) == 1:
+            await message.answer(
+                "Uso:\n"
+                "/meeting start [titolo] — avvia la registrazione\n"
+                "/meeting stop — ferma, trascrive e riassume\n"
+                "/meeting list — ultime riunioni\n"
+                "/meeting show <id> — dettaglio riunione"
+            )
+            return
+
+        command, _, rest = parts[1].partition(" ")
+        command = command.strip().lower()
+        rest = rest.strip()
+
+        if command == "start":
+            try:
+                path = await asyncio.to_thread(recorder.start, rest or "Riunione")
+            except Exception as exc:
+                await message.answer(f"Registrazione non avviata: {exc}")
+                return
+            await message.answer(f"🎙️ Registrazione avviata: `{path.name}`", parse_mode="Markdown")
+            return
+
+        if command == "stop":
+            try:
+                path, duration = await asyncio.to_thread(recorder.stop)
+            except Exception as exc:
+                await message.answer(f"Registrazione non fermata: {exc}")
+                return
+            await message.answer("⏳ Trascrivo e riassumo la riunione…")
+            try:
+                transcript = await asyncio.to_thread(transcribe_audio_file, path, self.settings)
+                summary, action_items = await asyncio.to_thread(summarize_meeting, transcript, self.settings)
+            except Exception as exc:
+                await message.answer(f"Riassunto non riuscito: {exc}")
+                return
+            meeting = await asyncio.to_thread(
+                store.add,
+                path.stem,
+                transcript,
+                summary,
+                action_items,
+                duration,
+            )
+            transcript_path = path.with_suffix(".txt")
+            transcript_path.write_text(transcript, encoding="utf-8")
+            await self._reply_chunks(message, store.format_meeting(meeting), parse_mode="Markdown")
+            return
+
+        if command == "list":
+            meetings = await asyncio.to_thread(store.list)
+            await message.answer(store.format_list(meetings), parse_mode="Markdown")
+            return
+
+        if command == "show":
+            try:
+                meeting_id = int(rest)
+            except ValueError:
+                await message.answer("Uso: /meeting show <id>")
+                return
+            meeting = await asyncio.to_thread(store.get, meeting_id)
+            if meeting is None:
+                await message.answer(f"Nessuna riunione con id {meeting_id}.")
+                return
+            await self._reply_chunks(message, store.format_meeting(meeting), parse_mode="Markdown")
+            return
+
+        await message.answer("Comando meeting non riconosciuto. Usa /meeting per l'elenco.")
 
     def _recent_files(self, limit: int = 10) -> list[Path]:
         candidates: list[Path] = []
