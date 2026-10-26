@@ -14,7 +14,13 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import FSInputFile, Message
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from .agent import ArtifactQueue, JarvisAgentRunner
 from .approvals import execute_approval
@@ -100,6 +106,7 @@ class JarvisTelegramService:
         self._last_sentinel_check = 0.0
         self._last_proactive_check = 0.0
         self._last_backup_date = None
+        self._notified_approvals: set[int] = set()
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -135,6 +142,10 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_photo, F.photo)
         self.dispatcher.message.register(self.handle_document, F.document)
         self.dispatcher.message.register(self.handle_text, F.text)
+        self.dispatcher.callback_query.register(
+            self.handle_approval_callback,
+            F.data.startswith("approve:") | F.data.startswith("cancel:"),
+        )
 
     def is_allowed_user(self, user_id: int | None) -> bool:
         return bool(user_id and user_id == self.settings.telegram_allowed_user_id)
@@ -150,7 +161,7 @@ class JarvisTelegramService:
         self.settings.ensure_directories()
         scheduler = asyncio.create_task(self._scheduler_loop())
         try:
-            await self.dispatcher.start_polling(self.bot, allowed_updates=["message"])
+            await self.dispatcher.start_polling(self.bot, allowed_updates=["message", "callback_query"])
         finally:
             scheduler.cancel()
             with suppress(asyncio.CancelledError):
@@ -622,6 +633,59 @@ class JarvisTelegramService:
         else:
             await message.answer("Approvazione non trovata o già gestita.")
 
+    async def _notify_pending_approvals(self, chat_id: int) -> None:
+        store = getattr(self.agent_runner, "approvals", None)
+        if store is None:
+            return
+        for approval in await asyncio.to_thread(store.pending, chat_id):
+            if approval.id in self._notified_approvals:
+                continue
+            self._notified_approvals.add(approval.id)
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="✅ Approva", callback_data=f"approve:{approval.id}"),
+                        InlineKeyboardButton(text="❌ Annulla", callback_data=f"cancel:{approval.id}"),
+                    ]
+                ]
+            )
+            await self.bot.send_message(
+                chat_id,
+                f"🔐 Azione in attesa di approvazione:\n{approval.description}",
+                reply_markup=keyboard,
+            )
+
+    async def handle_approval_callback(self, callback: CallbackQuery) -> None:
+        user = callback.from_user
+        if not self.is_allowed_user(user.id if user else None):
+            await callback.answer("Non autorizzato.", show_alert=True)
+            return
+        store = getattr(self.agent_runner, "approvals", None)
+        if store is None:
+            await callback.answer("Approvazioni non disponibili.", show_alert=True)
+            return
+
+        action, _, raw = (callback.data or "").partition(":")
+        try:
+            approval_id = int(raw)
+        except ValueError:
+            await callback.answer("Richiesta non valida.", show_alert=True)
+            return
+
+        if action == "approve":
+            approval = await asyncio.to_thread(store.approve, approval_id)
+            if approval is None:
+                await callback.answer("Già gestita.", show_alert=True)
+                return
+            result = await asyncio.to_thread(execute_approval, approval, self.settings, self.agent_runner)
+            if callback.message is not None:
+                await callback.bot.send_message(callback.message.chat.id, result)
+            await callback.answer("Approvata ✅")
+            return
+
+        cancelled = await asyncio.to_thread(store.cancel, approval_id)
+        await callback.answer("Annullata ❌" if cancelled else "Già gestita.", show_alert=not cancelled)
+
     async def handle_backup(self, message: Message) -> None:
         if not self._guard(message):
             return
@@ -939,6 +1003,7 @@ class JarvisTelegramService:
                         "Risposta vocale",
                     )
                 await self._reply_chunks(message, reply_text, parse_mode="Markdown")
+                await self._notify_pending_approvals(message.chat.id)
                 await self._deliver_artifacts(message.chat.id, artifact_queue.items)
             except Exception:
                 LOGGER.exception("Failed to process message %s", message.message_id)

@@ -154,7 +154,7 @@ jarvis-voice --push-to-talk
 | `/repo status\|index\|search` | Copilot del codice |
 | `/proactive on\|off\|status` | Controlli proattivi |
 | `/audit` | Ultime azioni registrate |
-| `/approvals` | Azioni in attesa |
+| `/approvals` | Azioni in attesa (con bottoni Approva/Annulla) |
 | `/confirm <id>`, `/cancel <id>` | Gestione approvazioni |
 | `/backup` | Backup manuale |
 | `/doctor` | Autodiagnosi configurazione |
