@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import mimetypes
+import time
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from datetime import time as dt_time
@@ -64,7 +65,9 @@ HELP_TEXT = (
     "/quality <file> — analisi difetti CSV/Excel\n"
     "/persona [nome] — cambia personalità\n"
     "/protocol [nome] — elenca o esegue protocolli\n"
-    "/meeting start|stop|list|show — registra e riassume riunioni\n\n"
+    "/meeting start|stop|list|show — registra e riassume riunioni\n"
+    "/look screen|camera [domanda] — analizza schermo o webcam\n"
+    "/sentinel on|off|status — modalità sentinella\n\n"
     "**Cosa so fare**\n"
     "• rispondere e ricordare il contesto della chat\n"
     "• trascrivere audio e descrivere immagini\n"
@@ -82,6 +85,7 @@ class JarvisTelegramService:
         self.dispatcher = Dispatcher()
         self._chat_locks: dict[int, asyncio.Lock] = {}
         self._run_semaphore = asyncio.Semaphore(max(1, settings.max_concurrent_runs))
+        self._last_sentinel_check = 0.0
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -101,6 +105,8 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_persona, Command("persona"))
         self.dispatcher.message.register(self.handle_protocol, Command("protocol"))
         self.dispatcher.message.register(self.handle_meeting, Command("meeting"))
+        self.dispatcher.message.register(self.handle_look, Command("look"))
+        self.dispatcher.message.register(self.handle_sentinel, Command("sentinel"))
         self.dispatcher.message.register(self.handle_voice, F.voice)
         self.dispatcher.message.register(self.handle_audio, F.audio)
         self.dispatcher.message.register(self.handle_photo, F.photo)
@@ -403,6 +409,73 @@ class JarvisTelegramService:
 
         await message.answer("Comando meeting non riconosciuto. Usa /meeting per l'elenco.")
 
+    async def handle_look(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        parts = (message.text or "").split(maxsplit=2)
+        target = parts[1].strip().lower() if len(parts) > 1 else "screen"
+        question = parts[2].strip() if len(parts) > 2 else ""
+        runner = self.agent_runner
+        if target.startswith("cam"):
+            action = getattr(runner, "look_at_camera", None)
+            default_question = "Cosa vedi davanti alla camera?"
+            caption = "Scatto camera"
+        elif target.startswith("screen") or target in {"schermo", "monitor"}:
+            action = getattr(runner, "look_at_screen", None)
+            default_question = "Cosa vedi sullo schermo? Segnala errori o elementi rilevanti."
+            caption = "Screenshot"
+        else:
+            await message.answer("Uso: /look screen [domanda] oppure /look camera [domanda]")
+            return
+        if action is None:
+            await message.answer("Visione non disponibile con questo runner.")
+            return
+        try:
+            analysis, path = await asyncio.to_thread(action, question or default_question)
+        except Exception as exc:
+            await message.answer(f"Analisi non riuscita: {exc}")
+            return
+        await self._reply_chunks(message, analysis, parse_mode="Markdown")
+        await self._deliver_artifacts(message.chat.id, [PendingArtifact(local_path=path, caption=caption)])
+
+    async def handle_sentinel(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        runner = self.agent_runner
+        state = getattr(runner, "app_state", None)
+        parts = (message.text or "").split(maxsplit=1)
+        action = parts[1].strip().lower() if len(parts) > 1 else "status"
+        enabled = (
+            state.get_bool(message.chat.id, "sentinel", self.settings.sentinel_enabled)
+            if state is not None
+            else self.settings.sentinel_enabled
+        )
+
+        if action in {"on", "off"}:
+            if state is None:
+                await message.answer("Preferenze non disponibili con questo runner.")
+                return
+            wanted = action == "on"
+            state.set(message.chat.id, "sentinel", "true" if wanted else "false")
+            if wanted and getattr(runner, "sentinel", None) is None:
+                from .vision import Sentinel
+
+                runner.sentinel = Sentinel(self.settings)
+            await message.answer(
+                "🚨 Sentinella attiva: controllerò la webcam periodicamente."
+                if wanted
+                else "Sentinella disattivata."
+            )
+            return
+
+        status = "attiva" if enabled else "disattiva"
+        await message.answer(
+            f"🚨 Sentinella **{status}**.\n"
+            f"Intervallo: {self.settings.sentinel_interval_seconds}s · soglia: {self.settings.sentinel_threshold}.\n"
+            "Usa /sentinel on oppure /sentinel off.",
+            parse_mode="Markdown",
+        )
+
     def _recent_files(self, limit: int = 10) -> list[Path]:
         candidates: list[Path] = []
         for directory in (self.settings.output_path, self.settings.reports_path):
@@ -423,6 +496,7 @@ class JarvisTelegramService:
                 await self._dispatch_due_reminders()
                 last_brief_date = await self._maybe_send_daily_brief(last_brief_date)
                 await self._process_quality_inbox()
+                await self._check_sentinel()
                 await asyncio.to_thread(self._cleanup_incoming)
             except Exception:
                 LOGGER.exception("Scheduler iteration failed")
@@ -491,6 +565,29 @@ class JarvisTelegramService:
                 sections.append("\n".join(lines))
 
         return "\n\n".join(sections)
+
+    async def _check_sentinel(self) -> None:
+        runner = self.agent_runner
+        sentinel = getattr(runner, "sentinel", None)
+        state = getattr(runner, "app_state", None)
+        enabled = (
+            state.get_bool(self.settings.telegram_allowed_user_id, "sentinel", self.settings.sentinel_enabled)
+            if state is not None
+            else self.settings.sentinel_enabled
+        )
+        if not enabled or sentinel is None:
+            return
+        now = time.time()
+        if now - self._last_sentinel_check < max(10, self.settings.sentinel_interval_seconds):
+            return
+        self._last_sentinel_check = now
+        result = await asyncio.to_thread(sentinel.check)
+        if result.motion:
+            await self.bot.send_photo(
+                chat_id=self.settings.telegram_allowed_user_id,
+                photo=FSInputFile(str(result.snapshot)),
+                caption=f"🚨 Movimento rilevato dalla sentinella (differenza {result.difference:.1f}).",
+            )
 
     async def _process_quality_inbox(self) -> None:
         if not self.settings.quality_watch_enabled:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from agno.agent import Agent
@@ -24,6 +25,7 @@ from .integrations import macos, music
 from .integrations.calendar import upcoming_events
 from .integrations.email import EmailClient
 from .integrations.github import GitHubClient
+from .integrations.home_assistant import HomeAssistantClient
 from .integrations.notion import NotionClient
 from .integrations.weather import get_weather
 from .knowledge import KnowledgeBase, format_hits, format_sources
@@ -31,11 +33,13 @@ from .media import generate_image, synthesize_speech
 from .meetings import MeetingRecorder, MeetingStore
 from .persona import persona_instructions
 from .plugins import PluginContext, PluginRegistry
+from .presence import PresenceTracker
 from .protocols import ProtocolRunner, ProtocolStore
 from .quality import build_quality_artifacts, record_snapshot, trend_spec
 from .reminders import ReminderStore
 from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
 from .schemas import ChartSeries, ChartSpec, IncomingMessage, PendingArtifact
+from .vision import Sentinel, analyze_image, capture_camera, capture_screen
 
 LOGGER = logging.getLogger(__name__)
 
@@ -309,6 +313,9 @@ class JarvisAgentRunner:
         self.protocol_runner = ProtocolRunner(settings.music_app)
         self.meetings = MeetingStore(settings.app_db_path_obj)
         self.meeting_recorder = MeetingRecorder(settings)
+        self.home_assistant = HomeAssistantClient.from_settings(settings)
+        self.presence = PresenceTracker(settings.phone_ip) if settings.presence_enabled else None
+        self.sentinel = Sentinel(settings) if settings.sentinel_enabled else None
         self.knowledge = (
             KnowledgeBase(settings.knowledge_db_path_obj, settings.knowledge_chunk_chars)
             if settings.knowledge_enabled
@@ -518,6 +525,96 @@ class JarvisAgentRunner:
 
         return [list_protocols, run_protocol, create_protocol]
 
+    def _home_tools(self) -> list[object]:
+        client = self.home_assistant
+        if client is None:
+            return []
+
+        def home_list(domain: str = "") -> str:
+            """Elenca le entità Home Assistant, opzionalmente filtrate per dominio (light, climate, switch...)."""
+            return client.list_entities(domain)
+
+        def home_state(entity_id: str) -> str:
+            """Legge lo stato di una entità Home Assistant (es. light.soggiorno)."""
+            return client.get_state(entity_id)
+
+        def home_turn_on(entity_id: str) -> str:
+            """Accende una entità Home Assistant."""
+            return client.turn_on(entity_id)
+
+        def home_turn_off(entity_id: str) -> str:
+            """Spegne una entità Home Assistant."""
+            return client.turn_off(entity_id)
+
+        def home_toggle(entity_id: str) -> str:
+            """Alterna una entità Home Assistant."""
+            return client.toggle(entity_id)
+
+        def home_set_temperature(entity_id: str, temperature: float) -> str:
+            """Imposta la temperatura di un clima Home Assistant."""
+            return client.set_temperature(entity_id, temperature)
+
+        def home_run_scene(entity_id: str) -> str:
+            """Attiva una scena Home Assistant."""
+            return client.run_scene(entity_id)
+
+        def home_summary() -> str:
+            """Riepilogo delle entità Home Assistant per dominio."""
+            return client.summary()
+
+        return [
+            home_list,
+            home_state,
+            home_turn_on,
+            home_turn_off,
+            home_toggle,
+            home_set_temperature,
+            home_run_scene,
+            home_summary,
+        ]
+
+    def _presence_tools(self) -> list[object]:
+        if self.presence is None:
+            return []
+
+        def is_user_home() -> str:
+            """Controlla se il telefono dell'utente è raggiungibile in rete (presenza a casa)."""
+            return self.presence.describe()
+
+        return [is_user_home]
+
+    def _vision_tools(self, artifact_queue: ArtifactQueue | None) -> list[object]:
+        if not self.settings.vision_enabled:
+            return []
+
+        def look_at_screen(question: str = "Cosa vedi sullo schermo? Segnala errori o elementi rilevanti.") -> str:
+            """Cattura lo schermo del Mac e lo analizza con il modello vision."""
+            analysis, path = self.look_at_screen(question)
+            if artifact_queue is not None:
+                artifact_queue.send_local_file(str(path), "Screenshot analizzato")
+            return analysis
+
+        def look_at_camera(question: str = "Cosa vedi davanti alla camera?") -> str:
+            """Cattura uno scatto dalla webcam e lo analizza con il modello vision."""
+            analysis, path = self.look_at_camera(question)
+            if artifact_queue is not None:
+                artifact_queue.send_local_file(str(path), "Scatto camera")
+            return analysis
+
+        return [look_at_screen, look_at_camera]
+
+    def look_at_screen(self, question: str = "Cosa vedi sullo schermo?") -> tuple[str, Path]:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = self.settings.output_path / f"screen-{stamp}.png"
+        capture_screen(path)
+        return analyze_image(path, question, self.settings), path
+
+    def look_at_camera(self, question: str = "Cosa vedi?") -> tuple[str, Path]:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = self.settings.output_path / f"camera-{stamp}.jpg"
+        capture_camera(path, self.settings.camera_device)
+        return analyze_image(path, question, self.settings), path
+
     def _integration_tools(self) -> list[object]:
         tools: list[object] = []
 
@@ -614,6 +711,7 @@ class JarvisAgentRunner:
         csv_paths: list[Path],
         runtime_tools: list[object],
         extra_tools: list[object] | None = None,
+        artifact_queue: ArtifactQueue | None = None,
     ) -> list[object]:
         tools: list[object] = [
             FileTools(base_dir=self.settings.workspace_path, enable_delete_file=False),
@@ -628,6 +726,9 @@ class JarvisAgentRunner:
             *self._macos_tools(),
             *self._music_tools(),
             *self._protocol_tools(chat_id),
+            *self._home_tools(),
+            *self._presence_tools(),
+            *self._vision_tools(artifact_queue),
             *self._integration_tools(),
             *runtime_tools,
             *(extra_tools or []),
@@ -690,7 +791,7 @@ class JarvisAgentRunner:
             tool_call_limit=self.settings.agent_tool_call_limit,
             retries=self.settings.agent_retries,
             markdown=True,
-            tools=self._build_tools(chat_id, csv_paths, runtime_tools, plugin_tools),
+            tools=self._build_tools(chat_id, csv_paths, runtime_tools, plugin_tools, artifact_queue),
             instructions=[
                 *persona_lines,
                 "Sei Jarvis, un assistente personale privato, proattivo e preciso.",
@@ -701,6 +802,8 @@ class JarvisAgentRunner:
                 "Se l'utente chiede di generare un'immagine usa create_image. Se chiede una risposta vocale usa create_voice_message.",
                 "Gestisci promemoria con create_reminder, list_reminders e cancel_reminder; usa il meteo con current_weather.",
                 "Per controllare il Mac usa i tool mac_* e music_*; per azioni composite usa list_protocols e run_protocol.",
+                "Per la casa usa i tool home_* (Home Assistant); per la presenza is_user_home.",
+                "Per analizzare schermo o webcam usa look_at_screen e look_at_camera, e cita ciò che vedi senza inventare.",
                 "Per domande su documenti già inviati usa search_knowledge e cita sempre la fonte (nome file).",
                 "Se sono disponibili, usa i tool GitHub, email, calendario e Notion per azioni concrete; non inventare dati che non puoi verificare.",
                 "Per i CSV preferisci spiegazioni semplici, con istogrammi facili da leggere e un breve testo che descriva il significato dell'infografica.",

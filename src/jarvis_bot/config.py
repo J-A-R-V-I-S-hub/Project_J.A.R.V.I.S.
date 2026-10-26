@@ -57,6 +57,19 @@ class Settings(BaseSettings):
     dashboard_host: str = Field(default="127.0.0.1", alias="JARVIS_DASHBOARD_HOST")
     dashboard_port: int = Field(default=8765, alias="JARVIS_DASHBOARD_PORT")
 
+    # Home Assistant / presence
+    home_assistant_url: str | None = Field(default=None, alias="HOME_ASSISTANT_URL")
+    home_assistant_token: str | None = Field(default=None, alias="HOME_ASSISTANT_TOKEN")
+    presence_enabled: bool = Field(default=False, alias="JARVIS_PRESENCE_ENABLED")
+    phone_ip: str | None = Field(default=None, alias="JARVIS_PHONE_IP")
+
+    # Vision / sentinel
+    vision_enabled: bool = Field(default=True, alias="JARVIS_VISION_ENABLED")
+    sentinel_enabled: bool = Field(default=False, alias="JARVIS_SENTINEL_ENABLED")
+    sentinel_interval_seconds: int = Field(default=60, alias="JARVIS_SENTINEL_INTERVAL_SECONDS")
+    sentinel_threshold: float = Field(default=12.0, alias="JARVIS_SENTINEL_THRESHOLD")
+    camera_device: str = Field(default="0", alias="JARVIS_CAMERA_DEVICE")
+
     # App state (reminders, artifacts, quality history)
     app_db_path: str = Field(default="data/jarvis_app.db", alias="JARVIS_APP_DB_PATH")
     reminder_poll_seconds: int = Field(default=15, alias="JARVIS_REMINDER_POLL_SECONDS")
