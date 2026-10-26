@@ -11,7 +11,7 @@
 - Coordina.
 - Evolve.
 
----
+![PROJECT J.A.R.V.I.S.](img/cover.jpeg)
 
 _"A volte bisogna correre prima ancora di imparare a camminare." — Tony Stark_
 
@@ -279,3 +279,26 @@ richiedere approvazione (`JARVIS_REQUIRE_APPROVAL=true`). I file inviabili sono
 limitati a `output/`, `reports/` e `workspace/`, con blocco di database e file sensibili.
 Con `JARVIS_SANDBOX_BACKEND=docker` il codice Python gira in un container senza rete,
 con limiti di memoria e CPU. L'HUD ascolta solo su `127.0.0.1` per default.
+
+## 👤 Autore
+
+Progetto sviluppato da [Henry](https://github.com/henry8913).
+
+## 📫 Contatti
+
+<div align="center">
+
+[![Website](https://img.shields.io/badge/-Website-000000?style=for-the-badge&logo=web&logoColor=white)](https://henrydev.it/)
+[![LinkedIn](https://img.shields.io/badge/-LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/in/henry-k-grecchi-555454254)
+[![Email](https://img.shields.io/badge/-Email-EA4335?style=for-the-badge&logo=gmail&logoColor=white)](mailto:henry8913@hotmail.it)
+[![WhatsApp](https://img.shields.io/badge/-WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)](https://api.whatsapp.com/send/?phone=393926936916&text&type=phone_number&app_absent=0)
+
+</div>
+
+<img src="./img/h_cover.jpg" alt="Cover" width="100%" />
+
+---
+
+## 📄 Licenza
+
+Questo progetto è rilasciato sotto licenza [MIT](LICENSE).
