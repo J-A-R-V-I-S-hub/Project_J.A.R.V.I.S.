@@ -11,16 +11,7 @@
 - Coordina.
 - Evolve.
 
-<div align="center">
-
-  <a href="https://www.youtube.com/watch?v=PZlL5gZeGDI" title="Guarda la scena su YouTube">
-    <img src="https://img.youtube.com/vi/PZlL5gZeGDI/sddefault.jpg" alt="J.A.R.V.I.S. — First Flight Test" width="640">
-  </a>
-
-  ▶️ **[Guarda la scena su YouTube](https://www.youtube.com/watch?v=PZlL5gZeGDI)**
-
-</div>
-
+![PROJECT J.A.R.V.I.S.](img/cover.jpeg)
 
 _"A volte bisogna correre prima ancora di imparare a camminare." — Tony Stark_
 
