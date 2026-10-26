@@ -265,19 +265,11 @@ def record_snapshot(db_path: str | Path, report: QualityReport) -> int:
 
 
 def trend_spec(db_path: str | Path, limit: int = 24) -> ChartSpec | None:
-    connection = _connect(db_path)
-    try:
-        rows = connection.execute(
-            "SELECT source, grand_total, created_at FROM quality_snapshots ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    finally:
-        connection.close()
-    rows.reverse()
+    rows = recent_snapshots(db_path, limit)
     if len(rows) < 2:
         return None
-    labels = [datetime.fromisoformat(row[2]).strftime("%d/%m %H:%M") for row in rows]
-    values = [float(row[1]) for row in rows]
+    labels = [datetime.fromisoformat(row["created_at"]).strftime("%d/%m %H:%M") for row in rows]
+    values = [float(row["grand_total"]) for row in rows]
     return ChartSpec(
         title="Trend difetti totali",
         labels=labels,
@@ -286,6 +278,30 @@ def trend_spec(db_path: str | Path, limit: int = 24) -> ChartSpec | None:
         x_label="Analisi",
         y_label="Difetti",
     )
+
+
+def recent_snapshots(db_path: str | Path, limit: int = 24) -> list[dict]:
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            "SELECT id, source, grand_total, products, categories, created_at "
+            "FROM quality_snapshots ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    finally:
+        connection.close()
+    ordered = list(reversed(rows))
+    return [
+        {
+            "id": row[0],
+            "source": row[1],
+            "grand_total": row[2],
+            "products": row[3],
+            "categories": row[4],
+            "created_at": row[5],
+        }
+        for row in ordered
+    ]
 
 
 def pending_quality_files(watch_dir: str | Path, db_path: str | Path) -> list[Path]:

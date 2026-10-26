@@ -43,6 +43,7 @@ voice = [
 [project.scripts]
 jarvis = "jarvis_bot.main:main"
 jarvis-voice = "jarvis_bot.voice_loop:main"
+jarvis-dashboard = "jarvis_bot.dashboard:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

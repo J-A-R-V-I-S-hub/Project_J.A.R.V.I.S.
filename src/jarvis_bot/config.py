@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     voice_max_seconds: float = Field(default=15.0, alias="JARVIS_VOICE_MAX_SECONDS")
     voice_device: int | None = Field(default=None, alias="JARVIS_VOICE_DEVICE")
     meeting_dir: str = Field(default="data/meetings", alias="JARVIS_MEETING_DIR")
+    dashboard_host: str = Field(default="127.0.0.1", alias="JARVIS_DASHBOARD_HOST")
+    dashboard_port: int = Field(default=8765, alias="JARVIS_DASHBOARD_PORT")
 
     # App state (reminders, artifacts, quality history)
     app_db_path: str = Field(default="data/jarvis_app.db", alias="JARVIS_APP_DB_PATH")
