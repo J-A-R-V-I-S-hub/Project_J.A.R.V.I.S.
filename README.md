@@ -59,6 +59,7 @@ _"A volte bisogna correre prima ancora di imparare a camminare." — Tony Stark_
 - Audit log delle azioni
 - Approvazioni per azioni sensibili (`/confirm`, `/cancel`)
 - Shell con allowlist
+- Sandbox Python locale o Docker (senza rete)
 - Backup automatici dei database
 - Routing modelli (economico/potente) e fallback Ollama
 - HUD locale con metriche e stato
@@ -189,6 +190,7 @@ Tutto passa da `.env`. Gruppi principali:
 | Proattività | `JARVIS_PROACTIVE_*` |
 | Integrazioni | `GITHUB_TOKEN`, `NOTION_TOKEN`, `CALENDAR_ICS_URL`, `EMAIL_*` |
 | Fondamenta | `JARVIS_REQUIRE_APPROVAL`, `JARVIS_SAFE_SHELL_ENABLED`, `JARVIS_BACKUP_*`, `JARVIS_MODEL_ROUTING_*` |
+| Sandbox | `JARVIS_SANDBOX_BACKEND`, `JARVIS_SANDBOX_IMAGE`, `JARVIS_SANDBOX_MEMORY` |
 
 Le integrazioni si attivano **solo** se le relative credenziali sono presenti.
 Senza `OPENAI_API_KEY` il TTS usa macOS `say`; la generazione immagini resta disabilitata.
@@ -244,6 +246,7 @@ src/jarvis_bot/
   codebase.py       copilot del repository
   models.py         routing modelli
   security.py       shell sicura
+  sandbox.py        esecuzione Python isolata (Docker opzionale)
   approvals.py      approvazioni
   audit.py          audit log
   backup.py         backup database
@@ -274,4 +277,5 @@ Il progetto è pensato per uso personale: non è multi-utente e non va esposto
 pubblicamente. La shell è limitata da una allowlist; le azioni sensibili possono
 richiedere approvazione (`JARVIS_REQUIRE_APPROVAL=true`). I file inviabili sono
 limitati a `output/`, `reports/` e `workspace/`, con blocco di database e file sensibili.
-L'HUD ascolta solo su `127.0.0.1` per default.
+Con `JARVIS_SANDBOX_BACKEND=docker` il codice Python gira in un container senza rete,
+con limiti di memoria e CPU. L'HUD ascolta solo su `127.0.0.1` per default.

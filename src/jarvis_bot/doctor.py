@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass
 
 from .config import Settings
+from .sandbox import docker_available
 
 REQUIRED_MODULES = {
     "agno": "core",
@@ -69,6 +70,12 @@ def run_checks(settings: Settings) -> list[Check]:
             Check("Email", bool(settings.email_imap_host and settings.email_username), "", required=False),
             Check("Calendario ICS", bool(settings.calendar_ics_url), "", required=False),
             Check("Presenza", bool(settings.phone_ip), "JARVIS_PHONE_IP", required=False),
+            Check(
+                "Docker",
+                docker_available(),
+                "sandbox Python",
+                required=settings.sandbox_backend.lower() == "docker",
+            ),
         ]
     )
     return checks

@@ -92,6 +92,13 @@ class Settings(BaseSettings):
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="llama3.2", alias="OLLAMA_MODEL")
 
+    # Sandbox
+    sandbox_backend: str = Field(default="local", alias="JARVIS_SANDBOX_BACKEND")
+    sandbox_image: str = Field(default="python:3.12-slim", alias="JARVIS_SANDBOX_IMAGE")
+    sandbox_timeout_seconds: int = Field(default=30, alias="JARVIS_SANDBOX_TIMEOUT_SECONDS")
+    sandbox_memory: str = Field(default="256m", alias="JARVIS_SANDBOX_MEMORY")
+    sandbox_cpus: str = Field(default="0.5", alias="JARVIS_SANDBOX_CPUS")
+
     # App state (reminders, artifacts, quality history)
     app_db_path: str = Field(default="data/jarvis_app.db", alias="JARVIS_APP_DB_PATH")
     reminder_poll_seconds: int = Field(default=15, alias="JARVIS_REMINDER_POLL_SECONDS")

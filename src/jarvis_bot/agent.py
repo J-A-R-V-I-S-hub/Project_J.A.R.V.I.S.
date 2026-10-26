@@ -44,6 +44,7 @@ from .protocols import ProtocolRunner, ProtocolStore
 from .quality import build_quality_artifacts, record_snapshot, trend_spec
 from .reminders import ReminderStore
 from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
+from .sandbox import docker_available, run_python_docker
 from .schemas import ChartSeries, ChartSpec, IncomingMessage, PendingArtifact
 from .security import run_safe_command
 from .simulation import scenarios_from_json, simulate_file
@@ -458,6 +459,30 @@ class JarvisAgentRunner:
             return result
 
         return run_shell_safe
+
+    def _python_tools(self) -> list[object]:
+        if self.settings.sandbox_backend.lower() != "docker":
+            return [PythonTools(base_dir=self.settings.python_sandbox_path)]
+
+        def run_python_sandboxed(code: str) -> str:
+            """Esegue codice Python in un container Docker isolato (senza rete, memoria limitata)."""
+            if not docker_available():
+                return "Sandbox Docker non disponibile: installa Docker oppure usa JARVIS_SANDBOX_BACKEND=local."
+            try:
+                result = run_python_docker(
+                    code,
+                    image=self.settings.sandbox_image,
+                    timeout=self.settings.sandbox_timeout_seconds,
+                    memory=self.settings.sandbox_memory,
+                    cpus=self.settings.sandbox_cpus,
+                )
+            except Exception as exc:
+                return f"Sandbox Python non riuscita: {exc}"
+            if self.settings.audit_enabled:
+                self.audit.record("sandbox.python", "docker")
+            return result
+
+        return [run_python_sandboxed]
 
     def _macos_tools(self) -> list[object]:
         if not (self.settings.macos_control_enabled and macos.on_macos()):
@@ -909,7 +934,7 @@ class JarvisAgentRunner:
         tools: list[object] = [
             FileTools(base_dir=self.settings.workspace_path, enable_delete_file=False),
             LocalFileSystemTools(target_directory=str(self.settings.output_path)),
-            PythonTools(base_dir=self.settings.python_sandbox_path),
+            *self._python_tools(),
             *(
                 [self._safe_shell_tool()]
                 if self.settings.safe_shell_enabled
