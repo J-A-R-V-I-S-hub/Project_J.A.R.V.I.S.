@@ -246,6 +246,17 @@ def main() -> None:
 
     settings = Settings()
     settings.validate_required_secrets()
+
+    try:
+        import numpy  # noqa: F401
+        import sounddevice  # noqa: F401
+    except ImportError:
+        print(
+            "Voice loop non disponibile: installa le dipendenze con\n"
+            "  python -m pip install -e '.[voice]'"
+        )
+        return
+
     assistant = VoiceAssistant(settings)
 
     if args.once:
