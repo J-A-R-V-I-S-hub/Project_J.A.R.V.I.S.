@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     agent_tool_call_limit: int = Field(default=10, alias="JARVIS_TOOL_CALL_LIMIT")
     agent_retries: int = Field(default=1, alias="JARVIS_AGENT_RETRIES")
     max_concurrent_runs: int = Field(default=1, alias="JARVIS_MAX_CONCURRENT_RUNS")
+    persona: str = Field(default="butler", alias="JARVIS_PERSONA")
+    address_as: str = Field(default="Signore", alias="JARVIS_ADDRESS_AS")
+    macos_control_enabled: bool = Field(default=True, alias="JARVIS_MACOS_CONTROL_ENABLED")
+    music_app: str = Field(default="Music", alias="JARVIS_MUSIC_APP")
+    protocols_enabled: bool = Field(default=True, alias="JARVIS_PROTOCOLS_ENABLED")
 
     # App state (reminders, artifacts, quality history)
     app_db_path: str = Field(default="data/jarvis_app.db", alias="JARVIS_APP_DB_PATH")

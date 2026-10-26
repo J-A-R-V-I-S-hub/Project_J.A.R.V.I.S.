@@ -19,6 +19,7 @@ from .agent import ArtifactQueue, JarvisAgentRunner
 from .config import Settings
 from .integrations.weather import get_weather
 from .knowledge import format_hits, format_sources
+from .persona import PERSONAS, normalize_persona, persona_choices, persona_label
 from .quality import (
     build_quality_artifacts,
     mark_quality_file,
@@ -58,7 +59,9 @@ HELP_TEXT = (
     "/sources — documenti indicizzati\n\n"
     "/brief — brief di oggi su richiesta\n"
     "/reminders — promemoria attivi\n"
-    "/quality <file> — analisi difetti CSV/Excel\n\n"
+    "/quality <file> — analisi difetti CSV/Excel\n"
+    "/persona [nome] — cambia personalità\n"
+    "/protocol [nome] — elenca o esegue protocolli\n\n"
     "**Cosa so fare**\n"
     "• rispondere e ricordare il contesto della chat\n"
     "• trascrivere audio e descrivere immagini\n"
@@ -92,6 +95,8 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_brief, Command("brief"))
         self.dispatcher.message.register(self.handle_reminders, Command("reminders"))
         self.dispatcher.message.register(self.handle_quality, Command("quality"))
+        self.dispatcher.message.register(self.handle_persona, Command("persona"))
+        self.dispatcher.message.register(self.handle_protocol, Command("protocol"))
         self.dispatcher.message.register(self.handle_voice, F.voice)
         self.dispatcher.message.register(self.handle_audio, F.audio)
         self.dispatcher.message.register(self.handle_photo, F.photo)
@@ -267,6 +272,52 @@ class JarvisTelegramService:
         await self._deliver_artifacts(
             message.chat.id,
             [PendingArtifact(local_path=artifact, caption=f"Qualità — {Path(target).name}") for artifact in artifacts],
+        )
+
+    async def handle_persona(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        state = getattr(self.agent_runner, "app_state", None)
+        parts = (message.text or "").split(maxsplit=1)
+        current = state.get(message.chat.id, "persona", self.settings.persona) if state else self.settings.persona
+        if len(parts) == 1:
+            await message.answer(
+                f"Persona attuale: **{persona_label(current)}**\n"
+                f"Disponibili: {', '.join(persona_choices())}.\n"
+                "Uso: /persona butler | friendly | concise | mentor | stark",
+                parse_mode="Markdown",
+            )
+            return
+        requested = parts[1].strip().lower()
+        if requested not in PERSONAS:
+            await message.answer(f"Persona non valida. Scegli tra: {', '.join(persona_choices())}.")
+            return
+        if state is None:
+            await message.answer("Preferenze non disponibili con questo runner.")
+            return
+        state.set(message.chat.id, "persona", normalize_persona(requested))
+        await message.answer(f"Persona impostata su **{persona_label(requested)}**.", parse_mode="Markdown")
+
+    async def handle_protocol(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        store = getattr(self.agent_runner, "protocols", None)
+        runner = getattr(self.agent_runner, "protocol_runner", None)
+        if store is None or runner is None:
+            await message.answer("Protocolli non disponibili con questo runner.")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) == 1:
+            await message.answer(store.format_list(), parse_mode="Markdown")
+            return
+        protocol = store.get(parts[1].strip().lower())
+        if protocol is None:
+            await message.answer(f"Protocollo non trovato. Ecco quelli disponibili:\n\n{store.format_list()}", parse_mode="Markdown")
+            return
+        results = await asyncio.to_thread(runner.run, protocol)
+        await message.answer(
+            f"🧩 **{protocol.name}**\n" + "\n".join(results),
+            parse_mode="Markdown",
         )
 
     def _recent_files(self, limit: int = 10) -> list[Path]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from agno.tools.websearch import WebSearchTools
 from .app_state import AppStateStore
 from .attachments import prepare_agent_input
 from .config import Settings
+from .integrations import macos, music
 from .integrations.calendar import upcoming_events
 from .integrations.email import EmailClient
 from .integrations.github import GitHubClient
@@ -26,7 +28,9 @@ from .integrations.notion import NotionClient
 from .integrations.weather import get_weather
 from .knowledge import KnowledgeBase, format_hits, format_sources
 from .media import generate_image, synthesize_speech
+from .persona import persona_instructions
 from .plugins import PluginContext, PluginRegistry
+from .protocols import ProtocolRunner, ProtocolStore
 from .quality import build_quality_artifacts, record_snapshot, trend_spec
 from .reminders import ReminderStore
 from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
@@ -300,6 +304,8 @@ class JarvisAgentRunner:
         )
         self.reminders = ReminderStore(settings.app_db_path_obj, settings.timezone)
         self.app_state = AppStateStore(settings.app_db_path_obj)
+        self.protocols = ProtocolStore(settings.app_db_path_obj)
+        self.protocol_runner = ProtocolRunner(settings.music_app)
         self.knowledge = (
             KnowledgeBase(settings.knowledge_db_path_obj, settings.knowledge_chunk_chars)
             if settings.knowledge_enabled
@@ -371,6 +377,143 @@ class JarvisAgentRunner:
             )
 
         return current_weather
+
+    def _macos_tools(self) -> list[object]:
+        if not (self.settings.macos_control_enabled and macos.on_macos()):
+            return []
+
+        def mac_open_app(name: str) -> str:
+            """Apre un'app macOS (es. 'Visual Studio Code', 'Safari')."""
+            return macos.open_app(name)
+
+        def mac_open_url(url: str) -> str:
+            """Apre un URL nel browser predefinito."""
+            return macos.open_url(url)
+
+        def mac_set_volume(level: int) -> str:
+            """Imposta il volume di sistema (0-100)."""
+            return macos.set_volume(level)
+
+        def mac_get_volume() -> str:
+            """Legge il volume di sistema."""
+            return macos.get_volume()
+
+        def mac_toggle_mute() -> str:
+            """Attiva/disattiva il mute audio."""
+            return macos.toggle_mute()
+
+        def mac_lock() -> str:
+            """Blocca lo schermo del Mac."""
+            return macos.lock_screen()
+
+        def mac_screenshot() -> str:
+            """Cattura uno screenshot dello schermo e lo salva in output."""
+            return macos.screenshot(self.settings.output_path / "screenshot.png")
+
+        def mac_notify(title: str, message: str) -> str:
+            """Mostra una notifica macOS."""
+            return macos.notify(title, message)
+
+        def mac_clipboard_get() -> str:
+            """Legge il contenuto degli appunti."""
+            return macos.clipboard_get()
+
+        def mac_clipboard_set(text: str) -> str:
+            """Scrive testo negli appunti."""
+            return macos.clipboard_set(text)
+
+        def mac_run_shortcut(name: str) -> str:
+            """Esegue una scorciatoia macOS (app Shortcuts)."""
+            return macos.run_shortcut(name)
+
+        def mac_system_health() -> str:
+            """Report di salute del Mac: CPU, RAM, disco, batteria."""
+            return macos.system_health()
+
+        return [
+            mac_open_app,
+            mac_open_url,
+            mac_set_volume,
+            mac_get_volume,
+            mac_toggle_mute,
+            mac_lock,
+            mac_screenshot,
+            mac_notify,
+            mac_clipboard_get,
+            mac_clipboard_set,
+            mac_run_shortcut,
+            mac_system_health,
+        ]
+
+    def _music_tools(self) -> list[object]:
+        if not (self.settings.macos_control_enabled and macos.on_macos()):
+            return []
+        app = self.settings.music_app
+
+        def music_play() -> str:
+            """Avvia la riproduzione musicale."""
+            return music.play(app)
+
+        def music_pause() -> str:
+            """Mette in pausa la musica."""
+            return music.pause(app)
+
+        def music_play_pause() -> str:
+            """Alterna play/pausa."""
+            return music.play_pause(app)
+
+        def music_next() -> str:
+            """Passa al brano successivo."""
+            return music.next_track(app)
+
+        def music_previous() -> str:
+            """Torna al brano precedente."""
+            return music.previous_track(app)
+
+        def music_current() -> str:
+            """Mostra il brano in riproduzione."""
+            return music.current_track(app)
+
+        def music_volume(level: int) -> str:
+            """Imposta il volume dell'app musicale (0-100)."""
+            return music.set_volume(app, level)
+
+        return [music_play, music_pause, music_play_pause, music_next, music_previous, music_current, music_volume]
+
+    def _protocol_tools(self, chat_id: int) -> list[object]:
+        if not self.settings.protocols_enabled:
+            return []
+
+        def list_protocols() -> str:
+            """Elenca i protocolli disponibili."""
+            return self.protocols.format_list()
+
+        def run_protocol(name: str) -> str:
+            """Esegue un protocollo per nome (es. 'lavoro', 'buonanotte')."""
+            protocol = self.protocols.get(name)
+            if protocol is None:
+                return f"Protocollo '{name}' non trovato. Usa list_protocols per vedere quelli disponibili."
+            results = self.protocol_runner.run(protocol)
+            return f"🧩 Protocollo **{protocol.name}**\n" + "\n".join(results)
+
+        def create_protocol(name: str, description: str, steps_json: str) -> str:
+            """Crea o aggiorna un protocollo.
+
+            `steps_json` è una lista JSON di passi, ad esempio:
+            [{"type": "open_app", "value": "Safari"}, {"type": "notify", "title": "Ciao", "message": "Fatto"}]
+            Tipi supportati: open_app, open_url, notify, volume, lock, screenshot, shortcut, sleep, music, home_assistant, backup.
+            """
+            try:
+                steps = json.loads(steps_json)
+            except ValueError as exc:
+                return f"JSON non valido: {exc}"
+            try:
+                protocol = self.protocols.upsert(name, description, steps)
+            except ValueError as exc:
+                return f"Protocollo non creato: {exc}"
+            return f"Protocollo '{protocol.name}' salvato con {len(protocol.steps)} passi."
+
+        return [list_protocols, run_protocol, create_protocol]
 
     def _integration_tools(self) -> list[object]:
         tools: list[object] = []
@@ -479,6 +622,9 @@ class JarvisAgentRunner:
             self._weather_tool(),
             *self._reminder_tools(chat_id),
             *self._knowledge_tools(),
+            *self._macos_tools(),
+            *self._music_tools(),
+            *self._protocol_tools(chat_id),
             *self._integration_tools(),
             *runtime_tools,
             *(extra_tools or []),
@@ -521,6 +667,8 @@ class JarvisAgentRunner:
         plugin_tools, plugin_instructions = self.plugins.build(
             PluginContext(self.settings, chat_id, artifact_queue)
         )
+        persona_name = self.app_state.get(chat_id, "persona", self.settings.persona)
+        persona_lines = persona_instructions(persona_name, self.settings.address_as)
         model_id = self.settings.openrouter_vision_model if vision_enabled else self.settings.openrouter_model
         return Agent(
             name="Jarvis",
@@ -541,6 +689,7 @@ class JarvisAgentRunner:
             markdown=True,
             tools=self._build_tools(chat_id, csv_paths, runtime_tools, plugin_tools),
             instructions=[
+                *persona_lines,
                 "Sei Jarvis, un assistente personale privato, proattivo e preciso.",
                 "Quando l'utente invia un audio usa la trascrizione come fonte primaria e cita eventuali incertezze.",
                 "Quando l'utente invia un PDF o un CSV senza testo, capisci automaticamente che deve essere riassunto o analizzato.",
@@ -548,6 +697,7 @@ class JarvisAgentRunner:
                 "Per analisi di difetti o tabelle qualità (prodotto × categorie) usa create_quality_report; per il trend usa create_quality_trend.",
                 "Se l'utente chiede di generare un'immagine usa create_image. Se chiede una risposta vocale usa create_voice_message.",
                 "Gestisci promemoria con create_reminder, list_reminders e cancel_reminder; usa il meteo con current_weather.",
+                "Per controllare il Mac usa i tool mac_* e music_*; per azioni composite usa list_protocols e run_protocol.",
                 "Per domande su documenti già inviati usa search_knowledge e cita sempre la fonte (nome file).",
                 "Se sono disponibili, usa i tool GitHub, email, calendario e Notion per azioni concrete; non inventare dati che non puoi verificare.",
                 "Per i CSV preferisci spiegazioni semplici, con istogrammi facili da leggere e un breve testo che descriva il significato dell'infografica.",

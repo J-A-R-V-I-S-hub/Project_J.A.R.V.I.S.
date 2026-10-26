@@ -9,8 +9,8 @@ ICS = """BEGIN:VCALENDAR
 VERSION:2.0
 BEGIN:VEVENT
 SUMMARY:Revisione qualità
-DTSTART;TZID=Europe/Rome:20261022T090000
-DTEND;TZID=Europe/Rome:20261022T100000
+DTSTART;TZID=Europe/Rome:20991022T090000
+DTEND;TZID=Europe/Rome:20991022T100000
 LOCATION:Ufficio
 END:VEVENT
 BEGIN:VEVENT
@@ -27,7 +27,7 @@ def test_parse_ics_reads_events() -> None:
     assert len(events) == 2
     by_summary = {event.summary: event for event in events}
     assert by_summary["Revisione qualità"].location == "Ufficio"
-    assert by_summary["Revisione qualità"].start.year == 2026
+    assert by_summary["Revisione qualità"].start.year == 2099
     assert "Evento passato" in by_summary
 
 
