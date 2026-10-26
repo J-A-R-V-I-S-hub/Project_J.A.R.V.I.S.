@@ -80,6 +80,17 @@ class EmailClient:
         header = f"📬 **Email non lette ({len(ids)})**"
         return "\n".join([header, *lines])
 
+    def count_unread(self) -> int:
+        try:
+            with self._imap() as client:
+                client.select("INBOX")
+                status, data = client.search(None, "UNSEEN")
+                if status != "OK":
+                    return 0
+                return len(data[0].split())
+        except Exception:
+            return 0
+
     def search(self, query: str, limit: int = 10) -> str:
         try:
             with self._imap() as client:

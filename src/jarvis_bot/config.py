@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     sentinel_threshold: float = Field(default=12.0, alias="JARVIS_SENTINEL_THRESHOLD")
     camera_device: str = Field(default="0", alias="JARVIS_CAMERA_DEVICE")
 
+    # Proactivity
+    proactive_enabled: bool = Field(default=True, alias="JARVIS_PROACTIVE_ENABLED")
+    proactive_interval_minutes: int = Field(default=15, alias="JARVIS_PROACTIVE_INTERVAL_MINUTES")
+    proactive_cooldown_seconds: int = Field(default=21600, alias="JARVIS_PROACTIVE_COOLDOWN_SECONDS")
+    proactive_email_threshold: int = Field(default=3, alias="JARVIS_PROACTIVE_EMAIL_THRESHOLD")
+    proactive_calendar_lookahead_minutes: int = Field(default=30, alias="JARVIS_PROACTIVE_CALENDAR_LOOKAHEAD_MINUTES")
+    repo_path: str = Field(default=".", alias="JARVIS_REPO_PATH")
+
     # App state (reminders, artifacts, quality history)
     app_db_path: str = Field(default="data/jarvis_app.db", alias="JARVIS_APP_DB_PATH")
     reminder_poll_seconds: int = Field(default=15, alias="JARVIS_REMINDER_POLL_SECONDS")

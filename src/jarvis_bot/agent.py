@@ -20,6 +20,7 @@ from agno.tools.websearch import WebSearchTools
 
 from .app_state import AppStateStore
 from .attachments import prepare_agent_input
+from .codebase import index_repository, repo_status, search_code
 from .config import Settings
 from .integrations import macos, music
 from .integrations.calendar import upcoming_events
@@ -34,11 +35,14 @@ from .meetings import MeetingRecorder, MeetingStore
 from .persona import persona_instructions
 from .plugins import PluginContext, PluginRegistry
 from .presence import PresenceTracker
+from .proactive import ProactiveEngine
+from .profile import ProfileStore
 from .protocols import ProtocolRunner, ProtocolStore
 from .quality import build_quality_artifacts, record_snapshot, trend_spec
 from .reminders import ReminderStore
 from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
 from .schemas import ChartSeries, ChartSpec, IncomingMessage, PendingArtifact
+from .simulation import scenarios_from_json, simulate_file
 from .vision import Sentinel, analyze_image, capture_camera, capture_screen
 
 LOGGER = logging.getLogger(__name__)
@@ -239,6 +243,55 @@ class ArtifactQueue:
             return "Servono almeno due analisi qualità salvate per disegnare il trend."
         return self.create_chart(spec, file_name=file_name, caption=caption, queue_for_delivery=queue_for_delivery)
 
+    def create_simulation_report(
+        self,
+        file_path: str,
+        value_column: str = "",
+        scenarios_json: str = "",
+        file_name: str = "simulazione",
+        caption: str = "",
+        queue_for_delivery: bool = True,
+    ) -> str:
+        """Simula scenari su una colonna numerica di un CSV/Excel e crea PNG + CSV + PDF.
+
+        `scenarios_json` è opzionale, ad esempio:
+        [{"name": "Taglio costi", "change_pct": -15}, {"name": "Crescita", "change_pct": 20}]
+        """
+        path = Path(file_path).expanduser().resolve()
+        if not path.exists():
+            return f"File non trovato: {path}"
+        try:
+            scenarios = scenarios_from_json(scenarios_json)
+            result = simulate_file(path, value_column or None, scenarios)
+        except Exception as exc:
+            return f"Simulazione non riuscita: {exc}"
+        if result.spec is None:
+            return "Simulazione senza dati da rappresentare."
+
+        stem = slugify_filename(path.stem, "simulation")
+        chart_path = render_chart(self.output_dir / f"{stem}-simulazione.png", result.spec)
+        rows = [
+            {
+                "scenario": item["name"],
+                "totale": item["total"],
+                "delta": item["delta"],
+                "delta_pct": item["delta_pct"],
+            }
+            for item in result.scenarios
+        ]
+        csv_path = self.output_dir / f"{stem}-simulazione.csv"
+        write_csv_file(csv_path, json.dumps(rows, ensure_ascii=False))
+        pdf_path = self.reports_dir / f"{stem}-simulazione.pdf"
+        build_pdf_report(
+            pdf_path,
+            title=f"Simulazione — {path.name}",
+            summary=result.summary,
+            chart_spec=result.spec,
+        )
+        for artifact in (chart_path, csv_path, pdf_path):
+            self._queue_if_requested(artifact, caption or f"Simulazione {path.name}", queue_for_delivery)
+        return result.summary + "\n\nFile creati: " + ", ".join(p.name for p in (chart_path, csv_path, pdf_path))
+
     def create_voice_message(
         self,
         text: str,
@@ -316,6 +369,8 @@ class JarvisAgentRunner:
         self.home_assistant = HomeAssistantClient.from_settings(settings)
         self.presence = PresenceTracker(settings.phone_ip) if settings.presence_enabled else None
         self.sentinel = Sentinel(settings) if settings.sentinel_enabled else None
+        self.profile = ProfileStore(settings.app_db_path_obj)
+        self.proactive = ProactiveEngine(settings, self.presence) if settings.proactive_enabled else None
         self.knowledge = (
             KnowledgeBase(settings.knowledge_db_path_obj, settings.knowledge_chunk_chars)
             if settings.knowledge_enabled
@@ -603,6 +658,89 @@ class JarvisAgentRunner:
 
         return [look_at_screen, look_at_camera]
 
+    def _profile_tools(self) -> list[object]:
+        def remember_fact(category: str, key: str, value: str) -> str:
+            """Salva un fatto stabile sul profilo utente (es. categoria 'preferenze', key 'caffè', value 'amaro')."""
+            fact = self.profile.remember(category, key, value)
+            return f"Salvato: [{fact.category}] {fact.key} = {fact.value}"
+
+        def recall_profile(category: str = "") -> str:
+            """Mostra i fatti del profilo, opzionalmente filtrati per categoria."""
+            return self.profile.format_facts(category or None)
+
+        def forget_fact(category: str, key: str) -> str:
+            """Rimuove un fatto dal profilo."""
+            return "Fatto rimosso." if self.profile.forget(category, key) else "Fatto non trovato."
+
+        def add_goal(title: str, due_at: str = "") -> str:
+            """Aggiunge un obiettivo al profilo."""
+            goal = self.profile.add_goal(title, due_at)
+            return f"Obiettivo #{goal.id} aggiunto: {goal.title}"
+
+        def list_goals() -> str:
+            """Elenca gli obiettivi aperti."""
+            goals = self.profile.goals()
+            if not goals:
+                return "Nessun obiettivo aperto."
+            return "\n".join(
+                f"• #{goal.id} {goal.title}" + (f" (scadenza {goal.due_at})" if goal.due_at else "")
+                for goal in goals
+            )
+
+        def complete_goal(goal_id: int) -> str:
+            """Segna un obiettivo come completato."""
+            return f"Obiettivo #{goal_id} completato." if self.profile.complete_goal(goal_id) else "Obiettivo non trovato."
+
+        def add_project(name: str, description: str = "") -> str:
+            """Aggiunge o aggiorna un progetto nel profilo."""
+            project = self.profile.add_project(name, description)
+            return f"Progetto '{project.name}' salvato."
+
+        def list_projects() -> str:
+            """Elenca i progetti del profilo."""
+            projects = self.profile.projects()
+            if not projects:
+                return "Nessun progetto salvato."
+            return "\n".join(f"• {project.name}: {project.description or 'nessuna descrizione'}" for project in projects)
+
+        return [
+            remember_fact,
+            recall_profile,
+            forget_fact,
+            add_goal,
+            list_goals,
+            complete_goal,
+            add_project,
+            list_projects,
+        ]
+
+    def _code_tools(self) -> list[object]:
+        def repo_status_tool() -> str:
+            """Mostra branch, stato e ultimi commit del repository locale."""
+            return repo_status(self.settings.repo_path)
+
+        def index_repository_tool() -> str:
+            """Indicizza il codice del repository nella knowledge base per la ricerca semantica."""
+            if self.knowledge is None:
+                return "Knowledge base disabilitata."
+            return index_repository(self.knowledge, self.settings.repo_path)
+
+        def search_code_tool(query: str) -> str:
+            """Cerca testo nel codice del repository (ripgrep o fallback)."""
+            return search_code(query, self.settings.repo_path)
+
+        return [repo_status_tool, index_repository_tool, search_code_tool]
+
+    def _proactive_tools(self) -> list[object]:
+        def check_proactive_now() -> str:
+            """Esegue subito i controlli proattivi (email, GitHub, calendario, meteo, presenza)."""
+            if self.proactive is None:
+                return "Proattività disattivata."
+            messages = self.proactive.check()
+            return "\n".join(messages) if messages else "Nessun evento proattivo al momento."
+
+        return [check_proactive_now]
+
     def look_at_screen(self, question: str = "Cosa vedi sullo schermo?") -> tuple[str, Path]:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         path = self.settings.output_path / f"screen-{stamp}.png"
@@ -729,6 +867,9 @@ class JarvisAgentRunner:
             *self._home_tools(),
             *self._presence_tools(),
             *self._vision_tools(artifact_queue),
+            *self._profile_tools(),
+            *self._code_tools(),
+            *self._proactive_tools(),
             *self._integration_tools(),
             *runtime_tools,
             *(extra_tools or []),
@@ -773,6 +914,7 @@ class JarvisAgentRunner:
         )
         persona_name = self.app_state.get(chat_id, "persona", self.settings.persona)
         persona_lines = persona_instructions(persona_name, self.settings.address_as)
+        profile_summary = self.profile.summary()
         model_id = self.settings.openrouter_vision_model if vision_enabled else self.settings.openrouter_model
         return Agent(
             name="Jarvis",
@@ -804,6 +946,9 @@ class JarvisAgentRunner:
                 "Per controllare il Mac usa i tool mac_* e music_*; per azioni composite usa list_protocols e run_protocol.",
                 "Per la casa usa i tool home_* (Home Assistant); per la presenza is_user_home.",
                 "Per analizzare schermo o webcam usa look_at_screen e look_at_camera, e cita ciò che vedi senza inventare.",
+                "Usa remember_fact/recall_profile per la memoria strutturata, add_goal/list_goals per gli obiettivi e add_project per i progetti.",
+                "Per simulazioni what-if su CSV/Excel usa create_simulation_report; per il codice usa repo_status_tool, index_repository_tool e search_code_tool.",
+                f"Profilo utente (memoria strutturata):\n{profile_summary}",
                 "Per domande su documenti già inviati usa search_knowledge e cita sempre la fonte (nome file).",
                 "Se sono disponibili, usa i tool GitHub, email, calendario e Notion per azioni concrete; non inventare dati che non puoi verificare.",
                 "Per i CSV preferisci spiegazioni semplici, con istogrammi facili da leggere e un breve testo che descriva il significato dell'infografica.",
@@ -845,6 +990,7 @@ class JarvisAgentRunner:
             artifact_queue.create_csv_file,
             artifact_queue.create_quality_report,
             artifact_queue.create_quality_trend,
+            artifact_queue.create_simulation_report,
             artifact_queue.create_voice_message,
             artifact_queue.create_image,
         ]

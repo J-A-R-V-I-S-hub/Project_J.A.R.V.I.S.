@@ -17,6 +17,7 @@ from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message
 
 from .agent import ArtifactQueue, JarvisAgentRunner
+from .codebase import index_repository, repo_status, search_code
 from .config import Settings
 from .integrations.weather import get_weather
 from .knowledge import format_hits, format_sources
@@ -67,7 +68,10 @@ HELP_TEXT = (
     "/protocol [nome] — elenca o esegue protocolli\n"
     "/meeting start|stop|list|show — registra e riassume riunioni\n"
     "/look screen|camera [domanda] — analizza schermo o webcam\n"
-    "/sentinel on|off|status — modalità sentinella\n\n"
+    "/sentinel on|off|status — modalità sentinella\n"
+    "/profile [categoria] — memoria strutturata\n"
+    "/repo status|index|search — copilot del codice\n"
+    "/proactive on|off|status — controlli proattivi\n\n"
     "**Cosa so fare**\n"
     "• rispondere e ricordare il contesto della chat\n"
     "• trascrivere audio e descrivere immagini\n"
@@ -86,6 +90,7 @@ class JarvisTelegramService:
         self._chat_locks: dict[int, asyncio.Lock] = {}
         self._run_semaphore = asyncio.Semaphore(max(1, settings.max_concurrent_runs))
         self._last_sentinel_check = 0.0
+        self._last_proactive_check = 0.0
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -107,6 +112,9 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_meeting, Command("meeting"))
         self.dispatcher.message.register(self.handle_look, Command("look"))
         self.dispatcher.message.register(self.handle_sentinel, Command("sentinel"))
+        self.dispatcher.message.register(self.handle_profile, Command("profile"))
+        self.dispatcher.message.register(self.handle_repo, Command("repo"))
+        self.dispatcher.message.register(self.handle_proactive, Command("proactive"))
         self.dispatcher.message.register(self.handle_voice, F.voice)
         self.dispatcher.message.register(self.handle_audio, F.audio)
         self.dispatcher.message.register(self.handle_photo, F.photo)
@@ -476,6 +484,74 @@ class JarvisTelegramService:
             parse_mode="Markdown",
         )
 
+    async def handle_profile(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        store = getattr(self.agent_runner, "profile", None)
+        if store is None:
+            await message.answer("Profilo non disponibile con questo runner.")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) == 1:
+            await message.answer(store.summary(), parse_mode="Markdown")
+            return
+        await message.answer(store.format_facts(parts[1].strip()), parse_mode="Markdown")
+
+    async def handle_repo(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        parts = (message.text or "").split(maxsplit=2)
+        action = parts[1].strip().lower() if len(parts) > 1 else "status"
+        if action == "index":
+            knowledge = getattr(self.agent_runner, "knowledge", None)
+            if knowledge is None:
+                await message.answer("Knowledge base disabilitata.")
+                return
+            result = await asyncio.to_thread(index_repository, knowledge, self.settings.repo_path)
+        elif action == "search":
+            query = parts[2].strip() if len(parts) > 2 else ""
+            if not query:
+                await message.answer("Uso: /repo search <testo>")
+                return
+            result = await asyncio.to_thread(search_code, query, self.settings.repo_path)
+        else:
+            result = await asyncio.to_thread(repo_status, self.settings.repo_path)
+        await self._reply_chunks(message, result, parse_mode="Markdown")
+
+    async def handle_proactive(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        runner = self.agent_runner
+        state = getattr(runner, "app_state", None)
+        parts = (message.text or "").split(maxsplit=1)
+        action = parts[1].strip().lower() if len(parts) > 1 else "status"
+        enabled = (
+            state.get_bool(message.chat.id, "proactive", self.settings.proactive_enabled)
+            if state is not None
+            else self.settings.proactive_enabled
+        )
+        if action in {"on", "off"}:
+            if state is None:
+                await message.answer("Preferenze non disponibili con questo runner.")
+                return
+            wanted = action == "on"
+            state.set(message.chat.id, "proactive", "true" if wanted else "false")
+            if wanted and getattr(runner, "proactive", None) is None:
+                from .proactive import ProactiveEngine
+
+                runner.proactive = ProactiveEngine(self.settings, runner.presence)
+            await message.answer(
+                "📡 Controlli proattivi attivi." if wanted else "📡 Controlli proattivi disattivati."
+            )
+            return
+        await message.answer(
+            f"📡 Proattività **{'attiva' if enabled else 'disattiva'}**.\n"
+            f"Intervallo: {self.settings.proactive_interval_minutes} min · cooldown: "
+            f"{self.settings.proactive_cooldown_seconds}s.\n"
+            "Usa /proactive on oppure /proactive off.",
+            parse_mode="Markdown",
+        )
+
     def _recent_files(self, limit: int = 10) -> list[Path]:
         candidates: list[Path] = []
         for directory in (self.settings.output_path, self.settings.reports_path):
@@ -497,6 +573,7 @@ class JarvisTelegramService:
                 last_brief_date = await self._maybe_send_daily_brief(last_brief_date)
                 await self._process_quality_inbox()
                 await self._check_sentinel()
+                await self._check_proactive()
                 await asyncio.to_thread(self._cleanup_incoming)
             except Exception:
                 LOGGER.exception("Scheduler iteration failed")
@@ -565,6 +642,26 @@ class JarvisTelegramService:
                 sections.append("\n".join(lines))
 
         return "\n\n".join(sections)
+
+    async def _check_proactive(self) -> None:
+        runner = self.agent_runner
+        engine = getattr(runner, "proactive", None)
+        state = getattr(runner, "app_state", None)
+        enabled = (
+            state.get_bool(self.settings.telegram_allowed_user_id, "proactive", self.settings.proactive_enabled)
+            if state is not None
+            else self.settings.proactive_enabled
+        )
+        if not enabled or engine is None:
+            return
+        now = time.time()
+        interval = max(60, self.settings.proactive_interval_minutes * 60)
+        if now - self._last_proactive_check < interval:
+            return
+        self._last_proactive_check = now
+        messages = await asyncio.to_thread(engine.check)
+        for message in messages:
+            await self.bot.send_message(self.settings.telegram_allowed_user_id, message)
 
     async def _check_sentinel(self) -> None:
         runner = self.agent_runner

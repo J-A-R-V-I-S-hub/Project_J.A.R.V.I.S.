@@ -92,6 +92,19 @@ class GitHubClient:
         data = response.json()
         return f"Issue creata: #{data['number']} {data['title']} ({data['html_url']})"
 
+    def count_notifications(self) -> int:
+        try:
+            response = httpx.get(
+                f"{self.base_url}/notifications",
+                headers=self._headers,
+                params={"all": "false", "per_page": 100},
+                timeout=20,
+            )
+            response.raise_for_status()
+            return len(response.json())
+        except Exception:
+            return 0
+
     def search_issues(self, query: str, repo: str | None = None, limit: int = 5) -> str:
         resolved = self._repo(repo)
         try:

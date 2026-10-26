@@ -91,3 +91,54 @@ def get_weather(
     if rain is not None:
         lines.append(f"Probabilità di precipitazioni: {rain}%.")
     return "\n".join(lines)
+
+
+def weather_alert(
+    location: str = "Casteggio",
+    latitude: float | None = None,
+    longitude: float | None = None,
+    timezone: str = "Europe/Rome",
+    precipitation_threshold: int = 60,
+) -> str | None:
+    """Return a short alert message when today's weather is severe, else None."""
+    try:
+        with httpx.Client(timeout=12) as client:
+            resolved_name = location
+            if latitude is None or longitude is None:
+                geo = client.get(
+                    "https://geocoding-api.open-meteo.com/v1/search",
+                    params={"name": location, "count": 1, "language": "it", "format": "json"},
+                )
+                geo.raise_for_status()
+                results = geo.json().get("results") or []
+                if not results:
+                    return None
+                place = results[0]
+                latitude = place["latitude"]
+                longitude = place["longitude"]
+                resolved_name = place.get("name") or location
+
+            forecast = client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "daily": "weather_code,precipitation_probability_max",
+                    "timezone": timezone,
+                    "forecast_days": 1,
+                },
+            )
+            forecast.raise_for_status()
+            daily = forecast.json().get("daily") or {}
+    except Exception:
+        return None
+
+    code = (daily.get("weather_code") or [0])[0]
+    rain = (daily.get("precipitation_probability_max") or [0])[0]
+    severe = int(code or 0) in {65, 75, 82, 95, 96, 99}
+    if severe or int(rain or 0) >= precipitation_threshold:
+        return (
+            f"⚠️ Meteo da tenere d'occhio a {resolved_name}: "
+            f"{_describe(code)}, precipitazioni {rain}%."
+        )
+    return None
