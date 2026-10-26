@@ -24,7 +24,7 @@ dependencies = [
   "python-docx>=1.1.0",
   "python-dotenv>=1.0.1",
   "reportlab>=4.2.0",
-  "sqlalchemy>=2.0.36",
+  "sqlalchemy[asyncio]>=2.0.36",
 ]
 
 [project.optional-dependencies]
