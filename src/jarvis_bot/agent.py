@@ -19,7 +19,9 @@ from agno.tools.shell import ShellTools
 from agno.tools.websearch import WebSearchTools
 
 from .app_state import AppStateStore
+from .approvals import ApprovalStore
 from .attachments import prepare_agent_input
+from .audit import AuditStore
 from .codebase import index_repository, repo_status, search_code
 from .config import Settings
 from .integrations import macos, music
@@ -32,6 +34,7 @@ from .integrations.weather import get_weather
 from .knowledge import KnowledgeBase, format_hits, format_sources
 from .media import generate_image, synthesize_speech
 from .meetings import MeetingRecorder, MeetingStore
+from .models import choose_model
 from .persona import persona_instructions
 from .plugins import PluginContext, PluginRegistry
 from .presence import PresenceTracker
@@ -42,6 +45,7 @@ from .quality import build_quality_artifacts, record_snapshot, trend_spec
 from .reminders import ReminderStore
 from .reporting import build_pdf_report, render_chart, slugify_filename, write_csv_file
 from .schemas import ChartSeries, ChartSpec, IncomingMessage, PendingArtifact
+from .security import run_safe_command
 from .simulation import scenarios_from_json, simulate_file
 from .vision import Sentinel, analyze_image, capture_camera, capture_screen
 
@@ -371,6 +375,8 @@ class JarvisAgentRunner:
         self.sentinel = Sentinel(settings) if settings.sentinel_enabled else None
         self.profile = ProfileStore(settings.app_db_path_obj)
         self.proactive = ProactiveEngine(settings, self.presence) if settings.proactive_enabled else None
+        self.audit = AuditStore(settings.app_db_path_obj)
+        self.approvals = ApprovalStore(settings.app_db_path_obj)
         self.knowledge = (
             KnowledgeBase(settings.knowledge_db_path_obj, settings.knowledge_chunk_chars)
             if settings.knowledge_enabled
@@ -443,21 +449,36 @@ class JarvisAgentRunner:
 
         return current_weather
 
+    def _safe_shell_tool(self) -> object:
+        def run_shell_safe(command: str) -> str:
+            """Esegue un comando shell in allowlist dentro la sandbox (ls, git status, pytest...)."""
+            result = run_safe_command(command, self.settings.shell_sandbox_path)
+            if self.settings.audit_enabled:
+                self.audit.record("shell.run", command)
+            return result
+
+        return run_shell_safe
+
     def _macos_tools(self) -> list[object]:
         if not (self.settings.macos_control_enabled and macos.on_macos()):
             return []
 
+        def _log(action: str, result: str) -> str:
+            if self.settings.audit_enabled:
+                self.audit.record(f"macos.{action}", str(result)[:500])
+            return result
+
         def mac_open_app(name: str) -> str:
             """Apre un'app macOS (es. 'Visual Studio Code', 'Safari')."""
-            return macos.open_app(name)
+            return _log("open_app", macos.open_app(name))
 
         def mac_open_url(url: str) -> str:
             """Apre un URL nel browser predefinito."""
-            return macos.open_url(url)
+            return _log("open_url", macos.open_url(url))
 
         def mac_set_volume(level: int) -> str:
             """Imposta il volume di sistema (0-100)."""
-            return macos.set_volume(level)
+            return _log("volume", macos.set_volume(level))
 
         def mac_get_volume() -> str:
             """Legge il volume di sistema."""
@@ -465,19 +486,19 @@ class JarvisAgentRunner:
 
         def mac_toggle_mute() -> str:
             """Attiva/disattiva il mute audio."""
-            return macos.toggle_mute()
+            return _log("mute", macos.toggle_mute())
 
         def mac_lock() -> str:
             """Blocca lo schermo del Mac."""
-            return macos.lock_screen()
+            return _log("lock", macos.lock_screen())
 
         def mac_screenshot() -> str:
             """Cattura uno screenshot dello schermo e lo salva in output."""
-            return macos.screenshot(self.settings.output_path / "screenshot.png")
+            return _log("screenshot", macos.screenshot(self.settings.output_path / "screenshot.png"))
 
         def mac_notify(title: str, message: str) -> str:
             """Mostra una notifica macOS."""
-            return macos.notify(title, message)
+            return _log("notify", macos.notify(title, message))
 
         def mac_clipboard_get() -> str:
             """Legge il contenuto degli appunti."""
@@ -485,11 +506,11 @@ class JarvisAgentRunner:
 
         def mac_clipboard_set(text: str) -> str:
             """Scrive testo negli appunti."""
-            return macos.clipboard_set(text)
+            return _log("clipboard_set", macos.clipboard_set(text))
 
         def mac_run_shortcut(name: str) -> str:
             """Esegue una scorciatoia macOS (app Shortcuts)."""
-            return macos.run_shortcut(name)
+            return _log("shortcut", macos.run_shortcut(name))
 
         def mac_system_health() -> str:
             """Report di salute del Mac: CPU, RAM, disco, batteria."""
@@ -558,7 +579,20 @@ class JarvisAgentRunner:
             protocol = self.protocols.get(name)
             if protocol is None:
                 return f"Protocollo '{name}' non trovato. Usa list_protocols per vedere quelli disponibili."
+            if self.settings.require_approval:
+                approval = self.approvals.request(
+                    chat_id,
+                    "protocol.run",
+                    {"name": protocol.name},
+                    f"Eseguire il protocollo '{protocol.name}'",
+                )
+                return (
+                    f"Protocollo in attesa di approvazione (#{approval.id}). "
+                    f"Usa /confirm {approval.id} oppure /cancel {approval.id}."
+                )
             results = self.protocol_runner.run(protocol)
+            if self.settings.audit_enabled:
+                self.audit.record("protocol.run", protocol.name)
             return f"🧩 Protocollo **{protocol.name}**\n" + "\n".join(results)
 
         def create_protocol(name: str, description: str, steps_json: str) -> str:
@@ -585,6 +619,11 @@ class JarvisAgentRunner:
         if client is None:
             return []
 
+        def _log(action: str, result: str) -> str:
+            if self.settings.audit_enabled:
+                self.audit.record(f"home_assistant.{action}", str(result)[:500])
+            return result
+
         def home_list(domain: str = "") -> str:
             """Elenca le entità Home Assistant, opzionalmente filtrate per dominio (light, climate, switch...)."""
             return client.list_entities(domain)
@@ -595,23 +634,23 @@ class JarvisAgentRunner:
 
         def home_turn_on(entity_id: str) -> str:
             """Accende una entità Home Assistant."""
-            return client.turn_on(entity_id)
+            return _log("turn_on", client.turn_on(entity_id))
 
         def home_turn_off(entity_id: str) -> str:
             """Spegne una entità Home Assistant."""
-            return client.turn_off(entity_id)
+            return _log("turn_off", client.turn_off(entity_id))
 
         def home_toggle(entity_id: str) -> str:
             """Alterna una entità Home Assistant."""
-            return client.toggle(entity_id)
+            return _log("toggle", client.toggle(entity_id))
 
         def home_set_temperature(entity_id: str, temperature: float) -> str:
             """Imposta la temperatura di un clima Home Assistant."""
-            return client.set_temperature(entity_id, temperature)
+            return _log("set_temperature", client.set_temperature(entity_id, temperature))
 
         def home_run_scene(entity_id: str) -> str:
             """Attiva una scena Home Assistant."""
-            return client.run_scene(entity_id)
+            return _log("scene", client.run_scene(entity_id))
 
         def home_summary() -> str:
             """Riepilogo delle entità Home Assistant per dominio."""
@@ -645,6 +684,8 @@ class JarvisAgentRunner:
         def look_at_screen(question: str = "Cosa vedi sullo schermo? Segnala errori o elementi rilevanti.") -> str:
             """Cattura lo schermo del Mac e lo analizza con il modello vision."""
             analysis, path = self.look_at_screen(question)
+            if self.settings.audit_enabled:
+                self.audit.record("vision.screen", question[:300])
             if artifact_queue is not None:
                 artifact_queue.send_local_file(str(path), "Screenshot analizzato")
             return analysis
@@ -753,7 +794,7 @@ class JarvisAgentRunner:
         capture_camera(path, self.settings.camera_device)
         return analyze_image(path, question, self.settings), path
 
-    def _integration_tools(self) -> list[object]:
+    def _integration_tools(self, chat_id: int) -> list[object]:
         tools: list[object] = []
 
         if self.settings.github_token:
@@ -815,7 +856,21 @@ class JarvisAgentRunner:
 
             def send_email(to: str, subject: str, body: str) -> str:
                 """Invia una email."""
-                return email_client.send(to, subject, body)
+                if self.settings.require_approval:
+                    approval = self.approvals.request(
+                        chat_id,
+                        "email.send",
+                        {"to": to, "subject": subject, "body": body},
+                        f"Email a {to}: {subject}",
+                    )
+                    return (
+                        f"Email in attesa di approvazione (#{approval.id}). "
+                        f"Usa /confirm {approval.id} oppure /cancel {approval.id}."
+                    )
+                result = email_client.send(to, subject, body)
+                if self.settings.audit_enabled:
+                    self.audit.record("email.send", f"a={to} oggetto={subject}")
+                return result
 
             tools.extend([list_unread_email, search_email, send_email])
 
@@ -855,7 +910,11 @@ class JarvisAgentRunner:
             FileTools(base_dir=self.settings.workspace_path, enable_delete_file=False),
             LocalFileSystemTools(target_directory=str(self.settings.output_path)),
             PythonTools(base_dir=self.settings.python_sandbox_path),
-            ShellTools(base_dir=self.settings.shell_sandbox_path),
+            *(
+                [self._safe_shell_tool()]
+                if self.settings.safe_shell_enabled
+                else [ShellTools(base_dir=self.settings.shell_sandbox_path)]
+            ),
             WebSearchTools(fixed_max_results=5),
             HackerNewsTools(),
             self._weather_tool(),
@@ -870,7 +929,7 @@ class JarvisAgentRunner:
             *self._profile_tools(),
             *self._code_tools(),
             *self._proactive_tools(),
-            *self._integration_tools(),
+            *self._integration_tools(chat_id),
             *runtime_tools,
             *(extra_tools or []),
         ]
@@ -908,6 +967,7 @@ class JarvisAgentRunner:
         runtime_tools: list[object],
         vision_enabled: bool,
         artifact_queue: ArtifactQueue | None = None,
+        model_id: str | None = None,
     ) -> Agent:
         plugin_tools, plugin_instructions = self.plugins.build(
             PluginContext(self.settings, chat_id, artifact_queue)
@@ -915,13 +975,17 @@ class JarvisAgentRunner:
         persona_name = self.app_state.get(chat_id, "persona", self.settings.persona)
         persona_lines = persona_instructions(persona_name, self.settings.address_as)
         profile_summary = self.profile.summary()
-        model_id = self.settings.openrouter_vision_model if vision_enabled else self.settings.openrouter_model
+        selected_model = (
+            self.settings.openrouter_vision_model
+            if vision_enabled
+            else (model_id or self.settings.openrouter_model)
+        )
         return Agent(
             name="Jarvis",
             user_id=user_id,
             session_id=self.session_id_for(chat_id),
             db=self.db,
-            model=OpenRouterResponses(id=model_id),
+            model=OpenRouterResponses(id=selected_model),
             memory_manager=self.memory_manager,
             enable_agentic_memory=True,
             add_history_to_context=True,
@@ -956,6 +1020,20 @@ class JarvisAgentRunner:
                 *plugin_instructions,
             ],
         )
+
+    def _run_fallback(self, prepared):
+        from agno.models.ollama import Ollama
+
+        fallback = Agent(
+            name="Jarvis Fallback",
+            model=Ollama(id=self.settings.ollama_model, host=self.settings.ollama_base_url),
+            markdown=True,
+            instructions=[
+                "Sei Jarvis. Rispondi in italiano, in modo conciso e utile.",
+                "Il modello principale non è disponibile: lavora con le informazioni nel prompt.",
+            ],
+        )
+        return fallback.run(input=prepared.prompt)
 
     def transcribe_audio(self, audio_path: Path) -> str:
         transcription_agent = Agent(
@@ -1001,11 +1079,23 @@ class JarvisAgentRunner:
             runtime_tools=runtime_tools,
             vision_enabled=bool(prepared.images),
             artifact_queue=artifact_queue,
+            model_id=choose_model(
+                message.text or "",
+                self.settings,
+                has_images=bool(prepared.images),
+                has_attachments=bool(message.attachments),
+            ),
         )
-        response = agent.run(
-            input=prepared.prompt,
-            images=prepared.images or None,
-        )
+        try:
+            response = agent.run(
+                input=prepared.prompt,
+                images=prepared.images or None,
+            )
+        except Exception:
+            LOGGER.exception("Primary model failed")
+            if not self.settings.ollama_enabled:
+                raise
+            response = self._run_fallback(prepared)
 
         if prepared.histogram_data and not artifact_queue.items and message.text.strip().lower().endswith("pdf"):
             spec = ChartSpec(

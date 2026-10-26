@@ -17,6 +17,8 @@ from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message
 
 from .agent import ArtifactQueue, JarvisAgentRunner
+from .approvals import execute_approval
+from .backup import create_backup
 from .codebase import index_repository, repo_status, search_code
 from .config import Settings
 from .integrations.weather import get_weather
@@ -71,7 +73,11 @@ HELP_TEXT = (
     "/sentinel on|off|status — modalità sentinella\n"
     "/profile [categoria] — memoria strutturata\n"
     "/repo status|index|search — copilot del codice\n"
-    "/proactive on|off|status — controlli proattivi\n\n"
+    "/proactive on|off|status — controlli proattivi\n"
+    "/audit — ultime azioni registrate\n"
+    "/approvals — azioni in attesa\n"
+    "/confirm <id> · /cancel <id> — approva o annulla\n"
+    "/backup — backup dei database\n\n"
     "**Cosa so fare**\n"
     "• rispondere e ricordare il contesto della chat\n"
     "• trascrivere audio e descrivere immagini\n"
@@ -91,6 +97,7 @@ class JarvisTelegramService:
         self._run_semaphore = asyncio.Semaphore(max(1, settings.max_concurrent_runs))
         self._last_sentinel_check = 0.0
         self._last_proactive_check = 0.0
+        self._last_backup_date = None
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -115,6 +122,11 @@ class JarvisTelegramService:
         self.dispatcher.message.register(self.handle_profile, Command("profile"))
         self.dispatcher.message.register(self.handle_repo, Command("repo"))
         self.dispatcher.message.register(self.handle_proactive, Command("proactive"))
+        self.dispatcher.message.register(self.handle_audit, Command("audit"))
+        self.dispatcher.message.register(self.handle_approvals, Command("approvals"))
+        self.dispatcher.message.register(self.handle_confirm, Command("confirm"))
+        self.dispatcher.message.register(self.handle_cancel, Command("cancel"))
+        self.dispatcher.message.register(self.handle_backup, Command("backup"))
         self.dispatcher.message.register(self.handle_voice, F.voice)
         self.dispatcher.message.register(self.handle_audio, F.audio)
         self.dispatcher.message.register(self.handle_photo, F.photo)
@@ -552,6 +564,71 @@ class JarvisTelegramService:
             parse_mode="Markdown",
         )
 
+    async def handle_audit(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        store = getattr(self.agent_runner, "audit", None)
+        if store is None:
+            await message.answer("Audit log non disponibile.")
+            return
+        await message.answer(store.format_recent(), parse_mode="Markdown")
+
+    async def handle_approvals(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        store = getattr(self.agent_runner, "approvals", None)
+        if store is None:
+            await message.answer("Approvazioni non disponibili.")
+            return
+        await message.answer(store.format_pending(message.chat.id), parse_mode="Markdown")
+
+    async def handle_confirm(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        store = getattr(self.agent_runner, "approvals", None)
+        if store is None:
+            await message.answer("Approvazioni non disponibili.")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) == 1 or not parts[1].strip().isdigit():
+            await message.answer("Uso: /confirm <id>")
+            return
+        approval = await asyncio.to_thread(store.approve, int(parts[1].strip()))
+        if approval is None:
+            await message.answer("Approvazione non trovata o già gestita.")
+            return
+        result = await asyncio.to_thread(execute_approval, approval, self.settings, self.agent_runner)
+        audit = getattr(self.agent_runner, "audit", None)
+        if audit is not None and self.settings.audit_enabled:
+            await asyncio.to_thread(audit.record, f"approval.{approval.action}", approval.description)
+        await message.answer(result)
+
+    async def handle_cancel(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        store = getattr(self.agent_runner, "approvals", None)
+        if store is None:
+            await message.answer("Approvazioni non disponibili.")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) == 1 or not parts[1].strip().isdigit():
+            await message.answer("Uso: /cancel <id>")
+            return
+        if await asyncio.to_thread(store.cancel, int(parts[1].strip())):
+            await message.answer("Azione annullata.")
+        else:
+            await message.answer("Approvazione non trovata o già gestita.")
+
+    async def handle_backup(self, message: Message) -> None:
+        if not self._guard(message):
+            return
+        result = await asyncio.to_thread(
+            create_backup,
+            self.settings.db_path.parent,
+            self.settings.backup_keep,
+        )
+        await message.answer(result)
+
     def _recent_files(self, limit: int = 10) -> list[Path]:
         candidates: list[Path] = []
         for directory in (self.settings.output_path, self.settings.reports_path):
@@ -574,6 +651,7 @@ class JarvisTelegramService:
                 await self._process_quality_inbox()
                 await self._check_sentinel()
                 await self._check_proactive()
+                self._last_backup_date = await self._maybe_backup(self._last_backup_date)
                 await asyncio.to_thread(self._cleanup_incoming)
             except Exception:
                 LOGGER.exception("Scheduler iteration failed")
@@ -642,6 +720,20 @@ class JarvisTelegramService:
                 sections.append("\n".join(lines))
 
         return "\n\n".join(sections)
+
+    async def _maybe_backup(self, last_backup_date):
+        if not self.settings.backup_enabled:
+            return last_backup_date
+        now = datetime.now(ZoneInfo(self.settings.timezone))
+        hour, minute = (int(part) for part in self.settings.backup_time.split(":", 1))
+        if now.time() < dt_time(hour, minute) or last_backup_date == now.date():
+            return last_backup_date
+        try:
+            await asyncio.to_thread(create_backup, self.settings.db_path.parent, self.settings.backup_keep)
+        except Exception:
+            LOGGER.exception("Backup failed")
+            return last_backup_date
+        return now.date()
 
     async def _check_proactive(self) -> None:
         runner = self.agent_runner

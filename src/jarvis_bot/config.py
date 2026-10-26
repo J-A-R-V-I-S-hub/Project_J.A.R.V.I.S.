@@ -78,6 +78,20 @@ class Settings(BaseSettings):
     proactive_calendar_lookahead_minutes: int = Field(default=30, alias="JARVIS_PROACTIVE_CALENDAR_LOOKAHEAD_MINUTES")
     repo_path: str = Field(default=".", alias="JARVIS_REPO_PATH")
 
+    # Foundations
+    require_approval: bool = Field(default=False, alias="JARVIS_REQUIRE_APPROVAL")
+    safe_shell_enabled: bool = Field(default=True, alias="JARVIS_SAFE_SHELL_ENABLED")
+    audit_enabled: bool = Field(default=True, alias="JARVIS_AUDIT_ENABLED")
+    backup_enabled: bool = Field(default=True, alias="JARVIS_BACKUP_ENABLED")
+    backup_time: str = Field(default="03:00", alias="JARVIS_BACKUP_TIME")
+    backup_keep: int = Field(default=7, alias="JARVIS_BACKUP_KEEP")
+    model_routing_enabled: bool = Field(default=True, alias="JARVIS_MODEL_ROUTING_ENABLED")
+    cheap_model: str = Field(default="openai/gpt-4.1-mini", alias="JARVIS_CHEAP_MODEL")
+    smart_model: str = Field(default="openai/gpt-4.1", alias="JARVIS_SMART_MODEL")
+    ollama_enabled: bool = Field(default=False, alias="JARVIS_OLLAMA_ENABLED")
+    ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
+    ollama_model: str = Field(default="llama3.2", alias="OLLAMA_MODEL")
+
     # App state (reminders, artifacts, quality history)
     app_db_path: str = Field(default="data/jarvis_app.db", alias="JARVIS_APP_DB_PATH")
     reminder_poll_seconds: int = Field(default=15, alias="JARVIS_REMINDER_POLL_SECONDS")

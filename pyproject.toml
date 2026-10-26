@@ -39,6 +39,7 @@ voice = [
   "faster-whisper>=1.0.0",
   "openwakeword>=0.6.0",
 ]
+ollama = ["ollama>=0.4.0"]
 
 [project.scripts]
 jarvis = "jarvis_bot.main:main"
